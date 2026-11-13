@@ -1,5 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">MyApp</string>
-    <string name="placeholder">Template is working. Ask Claude to build your app.</string>
+    <string name="app_name">Summit</string>
+    <string name="tab_today">Today</string>
+    <string name="tab_calendar">Calendar</string>
+    <string name="tab_someday">Someday</string>
+    <string name="settings">Settings</string>
+    <string name="add_task">Add task</string>
+    <string name="more_details">Add with details</string>
+    <string name="previous">Previous</string>
+    <string name="next">Next</string>
+    <string name="close">Close</string>
+    <string name="save">Save</string>
+    <string name="month">Month</string>
+    <string name="week">Week</string>
+    <string name="today">Today</string>
+    <string name="title_hint">What needs doing?</string>
+    <string name="label_time">Time</string>
+    <string name="label_reminder">Reminder</string>
+    <string name="label_repeat">Repeat</string>
+    <string name="label_duration">Estimated duration</string>
+    <string name="label_priority">Priority</string>
+    <string name="label_category">Category</string>
+    <string name="label_subtasks">Subtasks</string>
+    <string name="label_notes">Notes</string>
+    <string name="subtask_hint">Add a subtask</string>
+    <string name="notes_hint">Details, links, anything useful</string>
+    <string name="add_subtask">Add subtask</string>
+    <string name="delete_task">Delete task</string>
 </resources>

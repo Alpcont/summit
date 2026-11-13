@@ -1,8 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="bg">#F5F2EC</color>
-    <color name="surface">#FFFFFF</color>
-    <color name="text_primary">#23302B</color>
-    <color name="text_secondary">#6B756F</color>
-    <color name="brand">#2F8364</color>
+    <!-- Summit is always dark: near-black with one warm "alpenglow" accent. -->
+    <color name="bg">#0B0C0E</color>
+    <color name="surface">#15171A</color>
+    <color name="surface2">#1E2125</color>
+    <color name="line">#2A2D33</color>
+    <color name="text_primary">#F2F3F5</color>
+    <color name="text_secondary">#9096A0</color>
+    <color name="text_dim">#5C616B</color>
+    <color name="accent">#FF8552</color>
+    <color name="accent_soft">#26FF8552</color>
+    <color name="on_accent">#1A0D06</color>
+    <color name="danger">#FF6B6B</color>
 </resources>

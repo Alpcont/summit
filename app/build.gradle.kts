@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.alp.template"
+    namespace = "com.alp.summit"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.alp.template"
+        applicationId = "com.alp.summit"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -41,4 +41,4 @@ android {
     }
 }
 
-// No extra libraries — Android platform APIs only. Add one only when it saves a lot of code.
+// No extra libraries: Android platform APIs only.

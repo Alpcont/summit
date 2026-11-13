@@ -1,20 +1,42 @@
-# Android app template
+# Summit
 
-Starting point for Alp's small personal Android apps. Built entirely on GitHub —
-no Android Studio or terminal needed. Every push builds an APK and publishes it as a release.
+Alp's daily task planner for Android. Add the day's tasks, tick the box and the line is
+crossed out; a small mountain on the main page lights up as the day gets done. Tasks can be
+one-off, repeating, timed or parked in "Someday", and carry a colour category, priority,
+subtasks, notes and an estimated duration. A calendar (month and week) shows how each day
+went, a morning review asks what to do with anything left unfinished, and timed tasks send
+reminders. Everything is stored on the device; the app uses no internet.
 
-## Start a new app
-1. Click **Use this template → Create a new repository** and name it (e.g. `water-tracker`).
-2. Open the new repo with Claude and describe the app. Claude first renames the template
-   (app name, package) following `CLAUDE.md`, then builds the app.
-3. Install the APK from the repo's **Releases** page on your phone:
-   `https://github.com/Alpcont/<repo>/releases/latest/download/<AppName>.apk`
-
-## What's inside
-- `CLAUDE.md` — rules Claude follows in every app (read automatically).
-- `.github/workflows/build.yml` — builds, verifies and publishes the APK on every push.
-- `app/` — a minimal Kotlin app (one screen, light/dark theme, placeholder icon).
-- `app/debug.keystore` — fixed signing key, so updates install over the previous version.
+## Download
+https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
 
 ## Phone setup (once)
-Allow installing apps from your browser / file manager when Android asks.
+- Allow installing apps from your browser / file manager when Android asks.
+- Allow notifications when Summit asks on first start (needed for reminders).
+- If reminders arrive late: Settings → Apps → Summit → Battery → **Unrestricted**
+  (there is a shortcut in Summit's own settings).
+
+## How it works
+- **Today**: the list for today, sorted by time and then priority. Type in the bar at the
+  bottom to add a task; the pencil opens the full form. Tap a task to edit it, hold it for
+  quick actions (move to tomorrow, Someday, delete).
+- **Calendar**: switch between Month and Week. The bar under each day shows how much of it
+  was completed. Tap a day to see and add its tasks; swipe sideways to change month or week.
+- **Someday**: tasks without a date.
+- **Morning review**: opens once a day (from 08:00, changeable) when earlier tasks are still
+  unticked. For each one choose Today, Another day or Drop.
+- **Settings** (top right on Today): morning nudge time, categories and their colours.
+
+## Plan
+1. **Done**: tasks, calendar, morning review, reminders, categories.
+2. Next: home-screen widget, streaks and stats, focus timer on a task, smart quick-add
+   ("gym tomorrow 18:00"), evening planning screen.
+3. Later: sync between phone and tablet (Firebase + Google sign-in), phone calendar events
+   shown next to tasks.
+
+## Ideas for later
+- A "day starts at" hour, so tasks finished after midnight still count for the day before.
+- Backup to a file and restore.
+- Light theme.
+- Undo after deleting a task.
+- Rename a subtask in place.
