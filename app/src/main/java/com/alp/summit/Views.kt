@@ -639,6 +639,87 @@ class CelebrationView(ctx: Context, private val count: Int) : View(ctx) {
     }
 }
 
+// ---------- Week chart and timer ring ----------
+
+/** Seven bars, Monday to Sunday: how much of each day's tasks got done. */
+class BarsView(ctx: Context) : View(ctx) {
+    var rates = FloatArray(7) { -1f }   // 0..1 per day; below 0 = no tasks that day
+    var todayIndex = -1
+    private val letters = arrayOf("M", "T", "W", "T", "F", "S", "S")
+    private val accent = ctx.getColor(R.color.accent)
+    private val track = ctx.getColor(R.color.surface2)
+    private val dim = ctx.getColor(R.color.text_dim)
+    private val shape = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
+    private val bar = RectF()
+
+    override fun onMeasure(widthSpec: Int, heightSpec: Int) {
+        setMeasuredDimension(MeasureSpec.getSize(widthSpec), dp(150))
+    }
+
+    override fun onDraw(c: Canvas) {
+        val d = resources.displayMetrics.density
+        val cw = width / 7f
+        val top = 8f * d
+        val bottom = height - 28f * d
+        val w = 20f * d
+        for (i in 0 until 7) {
+            val cx = cw * (i + 0.5f)
+            shape.color = track
+            bar.set(cx - w / 2, top, cx + w / 2, bottom)
+            c.drawRoundRect(bar, w / 2, w / 2, shape)
+            val rate = rates[i]
+            if (rate > 0f) {
+                shape.color = if (i == todayIndex || rate >= 1f) accent else withAlpha(accent, 0x8C)
+                bar.set(cx - w / 2, bottom - max((bottom - top) * rate, w), cx + w / 2, bottom)
+                c.drawRoundRect(bar, w / 2, w / 2, shape)
+            }
+            text.textSize = 12f * d
+            text.color = if (i == todayIndex) accent else dim
+            text.typeface = if (i == todayIndex) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+            c.drawText(letters[i], cx, height - 8f * d, text)
+        }
+    }
+}
+
+/** The ring of the focus timer, with the time in its middle. */
+class RingView(ctx: Context) : View(ctx) {
+    var fraction = 1f
+    var label = ""
+    var sub = ""
+    private val accent = ctx.getColor(R.color.accent)
+    private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
+    private val oval = RectF()
+
+    override fun onDraw(c: Canvas) {
+        val d = resources.displayMetrics.density
+        val stroke = 10f * d
+        val size = min(width, height) - stroke
+        val cx = width / 2f
+        val cy = height / 2f
+        oval.set(cx - size / 2, cy - size / 2, cx + size / 2, cy + size / 2)
+        line.strokeWidth = stroke
+        line.color = context.getColor(R.color.surface2)
+        c.drawOval(oval, line)
+        if (fraction > 0f) {
+            line.color = accent
+            c.drawArc(oval, -90f, 360f * fraction.coerceIn(0f, 1f), false, line)
+        }
+        text.color = context.getColor(R.color.text_primary)
+        text.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+        text.textSize = 52f * d
+        c.drawText(label, cx, cy + 14f * d, text)
+        text.color = context.getColor(R.color.text_secondary)
+        text.typeface = Typeface.DEFAULT
+        text.textSize = 14f * d
+        c.drawText(sub, cx, cy + 44f * d, text)
+    }
+}
+
 // ---------- Wrapping row of chips ----------
 
 class FlowLayout @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = null) : ViewGroup(ctx, attrs) {

@@ -34,6 +34,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
     val subtasks = ArrayList<Subtask>()
     val subDone = HashSet<String>()    // ticked subtasks, see subKey()
     var rank = -1.0                    // position after dragging; below 0 = automatic order
+    var spent = 0                      // minutes of focus time logged on this task
     var created = System.currentTimeMillis()
     var updated = created
 
@@ -73,7 +74,9 @@ class Missed(val task: Task, val date: LocalDate)
 object Store {
     val tasks = ArrayList<Task>()
     val categories = ArrayList<Category>()
+    val focusLog = HashMap<String, Int>()   // day -> minutes of focus time
     private var file: File? = null
+    private var app: Context? = null
 
     // Tasks placed by hand come first in that order; the rest follow by time, then priority.
     private val order = compareBy<Task>(
@@ -87,6 +90,7 @@ object Store {
 
     @Synchronized
     fun load(ctx: Context) {
+        if (app == null) app = ctx.applicationContext
         if (file != null) return
         val f = File(ctx.applicationContext.filesDir, "summit.json")
         file = f
@@ -102,6 +106,7 @@ object Store {
             try { f.copyTo(File(f.parentFile, "summit.damaged.json"), true) } catch (_: Exception) {}
             tasks.clear()
             categories.clear()
+            focusLog.clear()
             seed()
         }
     }
@@ -125,6 +130,9 @@ object Store {
         val ts = JSONArray()
         for (t in tasks) ts.put(toJson(t))
         o.put("tasks", ts)
+        val fs = JSONObject()
+        for ((day, minutes) in focusLog) fs.put(day, minutes)
+        o.put("focus", fs)
         val text = o.toString()
         val tmp = File(f.parentFile, f.name + ".tmp")
         tmp.writeText(text)
@@ -132,6 +140,8 @@ object Store {
             f.writeText(text)
             tmp.delete()
         }
+        // Every change also reaches the home-screen widget.
+        app?.let { TodayWidget.refresh(it) }
     }
 
     private fun toJson(t: Task): JSONObject {
@@ -148,7 +158,7 @@ object Store {
         for (s in t.subtasks) ss.put(JSONObject().put("id", s.id).put("title", s.title))
         o.put("subtasks", ss)
         o.put("subDone", JSONArray(t.subDone.toList()))
-        o.put("rank", t.rank)
+        o.put("rank", t.rank).put("spent", t.spent)
         o.put("created", t.created).put("updated", t.updated)
         return o
     }
@@ -183,10 +193,17 @@ object Store {
                 t.subtasks.add(Subtask(s.getString("id"), s.optString("title")))
             }
             t.rank = j.optDouble("rank", -1.0)
+            t.spent = j.optInt("spent", 0)
             t.created = j.optLong("created", System.currentTimeMillis())
             t.updated = j.optLong("updated", t.created)
             tasks.add(t)
         }
+        readFocus(o)
+    }
+
+    private fun readFocus(o: JSONObject) {
+        val fs = o.optJSONObject("focus") ?: return
+        for (day in fs.keys()) focusLog[day] = fs.optInt(day, 0)
     }
 
     private fun strings(a: JSONArray?, into: MutableSet<String>) {
@@ -236,6 +253,60 @@ object Store {
             }
         }
         return out.sortedBy { it.date }
+    }
+
+    // ----- Streaks and statistics -----
+
+    /**
+     * Days in a row on which every planned task was ticked ("summit reached").
+     * Days without tasks neither count nor break the streak; today only counts once it is complete.
+     */
+    fun streak(today: LocalDate): Int {
+        var n = 0
+        for (i in 0 until 730) {
+            val d = today.minusDays(i.toLong())
+            val (done, total) = progress(d)
+            if (total == 0) continue
+            if (done == total) n++ else if (i > 0) break
+        }
+        return n
+    }
+
+    fun bestStreak(today: LocalDate): Int {
+        var best = 0
+        var run = 0
+        for (i in 729 downTo 0) {
+            val d = today.minusDays(i.toLong())
+            val (done, total) = progress(d)
+            if (total == 0) continue
+            if (done == total) run++ else if (i > 0) run = 0
+            if (run > best) best = run
+        }
+        return best
+    }
+
+    /** (done, total) summed over `days` days ending on `last`. */
+    fun totals(last: LocalDate, days: Int): Pair<Int, Int> {
+        var done = 0
+        var total = 0
+        for (i in 0 until days) {
+            val p = progress(last.minusDays(i.toLong()))
+            done += p.first
+            total += p.second
+        }
+        return Pair(done, total)
+    }
+
+    fun focusMinutes(last: LocalDate, days: Int): Int {
+        var sum = 0
+        for (i in 0 until days) sum += focusLog[last.minusDays(i.toLong()).toString()] ?: 0
+        return sum
+    }
+
+    fun logFocus(t: Task?, d: LocalDate, minutes: Int) {
+        if (minutes <= 0) return
+        if (t != null) t.spent += minutes
+        focusLog[d.toString()] = (focusLog[d.toString()] ?: 0) + minutes
     }
 
     // ----- Changes -----
@@ -298,3 +369,248 @@ fun fmtDuration(m: Int): String = when {
 }
 
 fun plural(n: Int, word: String): String = if (n == 1) "$n $word" else "$n ${word}s"
+
+fun repeatLabel(mask: Int): String {
+    if (mask == 127) return "Daily"
+    if (mask == 31) return "Weekdays"
+    val names = arrayOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    return (0 until 7).filter { mask and (1 shl it) != 0 }.joinToString(" ") { names[it] }
+}
+
+// ---------- Smart quick-add: "gym tomorrow 18:00 45m" ----------
+
+/** What was understood from a typed line. Fields left at their start value were not mentioned. */
+class Parsed(var title: String) {
+    var date: LocalDate? = null
+    var hasDate = false
+    var time = -1
+    var duration = 0
+    var priority = 0
+    var categoryId = ""
+    var repeatMask = 0
+
+    /** "Tomorrow · 18:00 · 45m · Gym", or "" when nothing special was found. */
+    fun summary(today: LocalDate): String {
+        val parts = ArrayList<String>()
+        val d = date
+        if (hasDate && d != null) parts.add(relDay(d, today))
+        if (time >= 0) parts.add(fmtTime(time))
+        if (duration > 0) parts.add(fmtDuration(duration))
+        if (repeatMask != 0) parts.add(repeatLabel(repeatMask))
+        Store.category(categoryId)?.let { parts.add(it.name) }
+        if (priority == 3) parts.add("High")
+        if (priority == 1) parts.add("Low")
+        return parts.joinToString("  ·  ")
+    }
+}
+
+private val DAY_WORDS = mapOf(
+    "monday" to 1, "tuesday" to 2, "wednesday" to 3, "thursday" to 4, "friday" to 5, "saturday" to 6, "sunday" to 7,
+    "mon" to 1, "tue" to 2, "tues" to 2, "wed" to 3, "thu" to 4, "thur" to 4, "thurs" to 4, "fri" to 5
+)
+// "sat" and "sun" are also ordinary words, so they only count after "on", "next" or "every".
+private val DAY_WORDS_LOOSE = mapOf("sat" to 6, "sun" to 7)
+private val MONTH_WORDS = listOf("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+private val MONTH_NAMES = listOf(
+    "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"
+)
+private val R_TIME = Regex("^(\\d{1,2}):(\\d{2})$")
+private val R_TIME_AMPM = Regex("^(\\d{1,2})(?::(\\d{2}))?(am|pm)$")
+private val R_TIME_BARE = Regex("^(\\d{1,2})(?::(\\d{2}))?$")
+private val R_MINUTES = Regex("^(\\d+)(m|min|mins|minutes)$")
+private val R_HOURS = Regex("^(\\d+(?:\\.\\d+)?)(h|hr|hrs|hour|hours)$")
+private val R_HOURS_MIN = Regex("^(\\d+)h(\\d+)m?$")
+private val R_NUMBER = Regex("^\\d+(?:\\.\\d+)?$")
+private val R_DAY_MONTH = Regex("^(\\d{1,2})[./](\\d{1,2})$")
+
+fun parseQuick(text: String, today: LocalDate, categories: List<Category>): Parsed {
+    val clean = text.trim()
+    val words = clean.split(Regex("\\s+")).filter { it.isNotEmpty() }
+    val used = BooleanArray(words.size)
+    val p = Parsed(clean)
+    fun low(i: Int): String = if (i in words.indices) words[i].lowercase().trimEnd(',') else ""
+    fun day(w: String, loose: Boolean): Int = DAY_WORDS[w] ?: (if (loose) DAY_WORDS_LOOSE[w] else null) ?: 0
+    fun next(dow: Int): LocalDate {
+        var d = today.plusDays(1)
+        while (d.dayOfWeek.value != dow) d = d.plusDays(1)
+        return d
+    }
+    fun setDate(d: LocalDate) {
+        p.date = d
+        p.hasDate = true
+    }
+    fun ampm(h: Int, m: Int, half: String): Int {
+        if (h < 1 || h > 12 || m > 59) return -1
+        return ((h % 12) + (if (half == "pm") 12 else 0)) * 60 + m
+    }
+    // Each reader returns how many words it used (0 = not this).
+    fun clock(i: Int): Int {
+        val w = low(i)
+        R_TIME.find(w)?.let {
+            val h = it.groupValues[1].toInt()
+            val m = it.groupValues[2].toInt()
+            if (h < 24 && m < 60) {
+                p.time = h * 60 + m
+                return 1
+            }
+        }
+        R_TIME_AMPM.find(w)?.let {
+            val t = ampm(it.groupValues[1].toInt(), it.groupValues[2].toIntOrNull() ?: 0, it.groupValues[3])
+            if (t >= 0) {
+                p.time = t
+                return 1
+            }
+        }
+        val half = low(i + 1)
+        if (half == "am" || half == "pm") R_TIME_BARE.find(w)?.let {
+            val t = ampm(it.groupValues[1].toInt(), it.groupValues[2].toIntOrNull() ?: 0, half)
+            if (t >= 0) {
+                p.time = t
+                return 2
+            }
+        }
+        return 0
+    }
+    fun length(i: Int): Int {
+        val w = low(i)
+        var minutes = 0
+        var took = 0
+        R_MINUTES.find(w)?.let {
+            minutes = it.groupValues[1].toInt()
+            took = 1
+        }
+        if (took == 0) R_HOURS.find(w)?.let {
+            minutes = Math.round(it.groupValues[1].toFloat() * 60)
+            took = 1
+        }
+        if (took == 0) R_HOURS_MIN.find(w)?.let {
+            minutes = it.groupValues[1].toInt() * 60 + it.groupValues[2].toInt()
+            took = 1
+        }
+        if (took == 0 && R_NUMBER.matches(w)) {
+            val unit = low(i + 1)
+            if (unit in setOf("min", "mins", "minutes") && !w.contains('.')) {
+                minutes = w.toInt()
+                took = 2
+            } else if (unit in setOf("h", "hr", "hrs", "hour", "hours")) {
+                minutes = Math.round(w.toFloat() * 60)
+                took = 2
+            }
+        }
+        if (took == 0 || minutes < 1 || minutes > 24 * 60) return 0
+        p.duration = minutes
+        return took
+    }
+    fun calendar(i: Int): Int {
+        val w = low(i)
+        var dayNo = 0
+        var monthNo = 0
+        var took = 0
+        R_DAY_MONTH.find(w)?.let {
+            dayNo = it.groupValues[1].toInt()
+            monthNo = it.groupValues[2].toInt()
+            took = 1
+        }
+        if (took == 0 && w.length <= 2 && w.all { it.isDigit() } && w.isNotEmpty()) {
+            val m = low(i + 1).trimEnd('.')
+            val index = if (m.length == 3) MONTH_WORDS.indexOf(m) else MONTH_NAMES.indexOf(m)
+            if (index >= 0) {
+                dayNo = w.toInt()
+                monthNo = index + 1
+                took = 2
+            }
+        }
+        if (took == 0) return 0
+        val d = try {
+            LocalDate.of(today.year, monthNo, dayNo)
+        } catch (e: Exception) {
+            return 0
+        }
+        setDate(if (d.isBefore(today)) d.plusYears(1) else d)
+        return took
+    }
+
+    var i = 0
+    while (i < words.size) {
+        val w = low(i)
+        val n = low(i + 1)
+        var took = 0
+        when {
+            w == "today" -> {
+                setDate(today)
+                took = 1
+            }
+            w == "tomorrow" || w == "tmrw" -> {
+                setDate(today.plusDays(1))
+                took = 1
+            }
+            w == "daily" || (w == "every" && n == "day") -> {
+                p.repeatMask = 127
+                took = if (w == "daily") 1 else 2
+            }
+            w == "weekdays" || (w == "every" && (n == "weekday" || n == "weekdays")) -> {
+                p.repeatMask = 31
+                took = if (w == "weekdays") 1 else 2
+            }
+            w == "every" && day(n, true) != 0 -> {
+                // "every mon wed fri", "every tue and thu"
+                took = 1
+                while (true) {
+                    var j = i + took
+                    if (low(j) == "and") j++
+                    val dow = day(low(j), true)
+                    if (dow == 0) break
+                    p.repeatMask = p.repeatMask or (1 shl (dow - 1))
+                    took = j - i + 1
+                }
+            }
+            (w == "on" || w == "next") && day(n, true) != 0 -> {
+                setDate(next(day(n, true)))
+                took = 2
+            }
+            day(w, false) != 0 -> {
+                setDate(next(day(w, false)))
+                took = 1
+            }
+            w.length > 1 && w.startsWith("#") -> {
+                val c = categories.firstOrNull { it.name.lowercase().startsWith(w.substring(1)) }
+                if (c != null) {
+                    p.categoryId = c.id
+                    took = 1
+                }
+            }
+            w == "!" || w == "!!" || w == "!high" || w == "!h" -> {
+                p.priority = 3
+                took = 1
+            }
+            w == "!med" || w == "!medium" -> {
+                p.priority = 2
+                took = 1
+            }
+            w == "!low" || w == "!l" -> {
+                p.priority = 1
+                took = 1
+            }
+            w == "at" && clock(i + 1) != 0 -> took = 1 + clock(i + 1)
+            w == "for" && length(i + 1) != 0 -> took = 1 + length(i + 1)
+            w == "on" && calendar(i + 1) != 0 -> took = 1 + calendar(i + 1)
+            else -> {
+                took = clock(i)
+                if (took == 0) took = length(i)
+                if (took == 0) took = calendar(i)
+            }
+        }
+        for (k in i until minOf(i + took, words.size)) used[k] = true
+        i += maxOf(took, 1)
+    }
+
+    val rest = words.filterIndexed { k, _ -> !used[k] }
+    if (rest.isEmpty()) return Parsed(clean)     // only keywords: keep the line as it was typed
+    p.title = rest.joinToString(" ")
+    // A word that is itself a category name picks that category ("gym tomorrow" -> Gym).
+    if (p.categoryId.isEmpty()) {
+        val plain = rest.map { it.lowercase().trim(',', '.', '!', '?') }
+        categories.firstOrNull { it.name.lowercase() in plain }?.let { p.categoryId = it.id }
+    }
+    return p
+}

@@ -67,6 +67,24 @@ class SettingsActivity : Activity() {
         }
         note("A notification with your day, and the review of unfinished tasks. The review opens by itself from this time on.")
 
+        label("Evening")
+        val evening = p.getBoolean("evening", true)
+        row("Evening planning", if (evening) "On" else "Off", if (evening) getColor(R.color.accent) else 0) {
+            p.edit().putBoolean("evening", !evening).apply()
+            Reminders.schedule(this)
+            render()
+        }
+        val eveningMinutes = p.getInt("eveningTime", 21 * 60 + 30)
+        row("Time", fmtTime(eveningMinutes), 0) {
+            TimePickerDialog(this, R.style.AppDialog, { _, h, m ->
+                p.edit().putInt("eveningTime", h * 60 + m).apply()
+                Reminders.schedule(this)
+                render()
+            }, eveningMinutes / 60, eveningMinutes % 60, true).show()
+        }
+        row("Plan tomorrow now", "›", 0) { startActivity(Intent(this, PlanActivity::class.java)) }
+        note("A notification in the evening that opens a short screen to set up tomorrow.")
+
         label("Categories")
         for (c in Store.categories) row(c.name, "●", c.color) { editCategory(c) }
         row("Add a category", "+", getColor(R.color.accent)) { editCategory(null) }

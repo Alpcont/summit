@@ -29,18 +29,31 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
 - **Someday**: tasks without a date.
 - **Morning review**: opens once a day (from 08:00, changeable) when earlier tasks are still
   unticked. For each one choose Today, Another day or Drop.
-- **Settings** (top right on Today): morning nudge time, categories and their colours.
+- **Settings** (top right on Today): morning and evening times, categories and their colours.
+- **Quick-add shortcuts**: type details in the same line and they are understood, with a
+  preview above the bar. Dates: `today`, `tomorrow`, `mon`…`fri`, `on sat`, `17.11`, `17 nov`.
+  Times: `18:00`, `6pm`. Duration: `45m`, `1.5h`. Repeats: `daily`, `weekdays`, `every mon wed`.
+  Category: `#gym`, or a word that is a category name. Priority: `!high`, `!low`.
+- **Widget**: hold an empty spot on the home screen → Widgets → Summit. It lists today's
+  tasks; tap one to tick it, tap + to add.
+- **Progress** (bars icon on Today): streak, this week's chart, last 30 days, focus time.
+  A streak day is a day on which every planned task was ticked; days without tasks are skipped.
+- **Focus timer**: hold a task → Start focus timer. The minutes are logged on the task when
+  the session ends, also if the app is closed in between.
+- **Evening planning**: a nudge at 21:30 (changeable) opens a screen to set up tomorrow:
+  add tasks, carry over what is still open, pull tasks from Someday.
 
 ## Plan
 1. **Done**: tasks, calendar, morning review, reminders, categories.
-2. Next: home-screen widget, streaks and stats, focus timer on a task, smart quick-add
-   ("gym tomorrow 18:00"), evening planning screen.
-3. Later: sync between phone and tablet (Firebase + Google sign-in), phone calendar events
+2. **Done**: home-screen widget, streaks and stats, focus timer, smart quick-add, evening planning.
+3. Next: sync between phone and tablet (Firebase + Google sign-in), phone calendar events
    shown next to tasks.
 
 ## Ideas for later
 - A "day starts at" hour, so tasks finished after midnight still count for the day before.
 - Backup to a file and restore.
 - Light theme.
+- Turkish words in quick-add ("yarın", "bugün").
+- A second, smaller widget; a running focus timer shown in the notification bar.
 - A "sort automatically again" button after tasks were dragged by hand.
 - Rename a subtask in place.

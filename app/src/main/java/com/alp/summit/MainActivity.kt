@@ -9,7 +9,9 @@ import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.text.Editable
 import android.text.SpannableStringBuilder
+import android.text.TextWatcher
 import android.text.style.ForegroundColorSpan
 import android.content.Context
 import android.view.Gravity
@@ -73,6 +75,7 @@ class MainActivity : Activity() {
     private var settleToken = 0
     private var undo: (() -> Unit)? = null
     private val hideUndo = Runnable { dismissUndo() }
+    private var openPlan = false
     private var side = -1
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -114,6 +117,17 @@ class MainActivity : Activity() {
             Reminders.schedule(this)
             dismissUndo()
         }
+        // Show what the quick-add understands while typing: "gym tomorrow 18:00" -> "Tomorrow · 18:00 · Gym".
+        val preview = findViewById<TextView>(R.id.quick_preview)
+        input.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                val summary = parseQuick(s?.toString() ?: "", today, Store.categories).summary(today)
+                preview.text = summary
+                preview.visibility = if (summary.isEmpty()) View.GONE else View.VISIBLE
+            }
+        })
         findViewById<View>(R.id.quick_add).setOnClickListener { quickAdd() }
         findViewById<View>(R.id.quick_more).setOnClickListener { openEditor(null, input.text.toString().trim()) }
         input.setOnEditorActionListener { _, action, _ ->
@@ -139,6 +153,7 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
         forceReview = intent?.getBooleanExtra("review", false) == true
+        openPlan = intent?.getBooleanExtra("plan", false) == true
     }
 
     private fun applySide() {
@@ -157,6 +172,7 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra("review", false)) forceReview = true
+        if (intent.getBooleanExtra("plan", false)) openPlan = true
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -178,7 +194,12 @@ class MainActivity : Activity() {
         render(if (firstShow) PAGE else NONE)
         firstShow = false
         Reminders.schedule(this)
-        maybeReview()
+        if (openPlan) {
+            openPlan = false
+            startActivity(Intent(this, PlanActivity::class.java))
+        } else {
+            maybeReview()
+        }
     }
 
     /** Esc on a keyboard always leads back to the Today page. */
@@ -269,6 +290,9 @@ class MainActivity : Activity() {
             hour < 12 -> "Good morning, Alp"
             hour < 18 -> "Good afternoon, Alp"
             else -> "Good evening, Alp"
+        } + Store.streak(today).let { if (it >= 2) "  ·  $it-day streak" else "" }
+        h.findViewById<View>(R.id.btn_stats).setOnClickListener {
+            startActivity(Intent(this, StatsActivity::class.java))
         }
         h.findViewById<TextView>(R.id.today_title).text = weekdayName(today)
         h.findViewById<TextView>(R.id.today_sub).text = dayMonth(today)
@@ -307,6 +331,25 @@ class MainActivity : Activity() {
                 forceReview = true
                 maybeReview()
             }
+        }
+
+        val p = prefs(this)
+        val focusEnd = p.getLong("focusEnd", 0L)
+        if (focusEnd > System.currentTimeMillis()) {
+            val focus = h.findViewById<TextView>(R.id.focus_banner)
+            val until = java.time.Instant.ofEpochMilli(focusEnd).atZone(java.time.ZoneId.systemDefault()).toLocalTime()
+            focus.visibility = View.VISIBLE
+            focus.text = "Focus running until " + fmtTime(until.hour * 60 + until.minute) + "  ·  Open"
+            focus.setOnClickListener { startActivity(Intent(this, FocusActivity::class.java)) }
+        }
+        val nowMinutes = LocalTime.now().hour * 60 + LocalTime.now().minute
+        if (p.getBoolean("evening", true) && nowMinutes >= p.getInt("eveningTime", 21 * 60 + 30) &&
+            p.getString("planShown", "") != today.toString()
+        ) {
+            val plan = h.findViewById<TextView>(R.id.plan_banner)
+            plan.visibility = View.VISIBLE
+            plan.text = "Evening: set up tomorrow  ·  Plan"
+            plan.setOnClickListener { startActivity(Intent(this, PlanActivity::class.java)) }
         }
 
         val all = Store.on(today)
@@ -665,6 +708,7 @@ class MainActivity : Activity() {
             val ticked = t.subtasks.count { t.subKey(d, it) in t.subDone }
             part("$ticked/${t.subtasks.size}")
         }
+        if (t.spent > 0) part(fmtDuration(t.spent) + " focused")
         if (t.priority == 1) part("Low")
         if (t.notes.isNotBlank()) part("Note")
         meta.text = sb
@@ -706,18 +750,12 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun repeatLabel(mask: Int): String {
-        if (mask == 127) return "Daily"
-        if (mask == 31) return "Weekdays"
-        val names = arrayOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-        return (0 until 7).filter { mask and (1 shl it) != 0 }.joinToString(" ") { names[it] }
-    }
-
     private fun rowMenu(r: Row) {
         val t = r.task
         val d = r.date
         val m = PopupMenu(this, r.inner, Gravity.END)
         m.menu.add(0, 1, 0, "Edit")
+        if (!t.isDone(d)) m.menu.add(0, 8, 0, "Start focus timer")
         if (t.repeating && d != null) {
             m.menu.add(0, 5, 0, "Skip this day")
             m.menu.add(0, 6, 0, "Delete all repeats")
@@ -740,6 +778,9 @@ class MainActivity : Activity() {
                     .setNegativeButton("Cancel", null)
                     .show()
                 7 -> collapse(r.view) { delete(t) }
+                8 -> startActivity(
+                    Intent(this, FocusActivity::class.java).putExtra("id", t.id).putExtra("date", d?.toString() ?: "")
+                )
             }
             true
         }
@@ -781,6 +822,10 @@ class MainActivity : Activity() {
         Store.save()
         renderMoving()
         Reminders.schedule(this)
+        offerUndo(message, restore)
+    }
+
+    private fun offerUndo(message: String, restore: () -> Unit) {
         undo = restore
         findViewById<TextView>(R.id.undo_text).text = message
         val bar = findViewById<View>(R.id.undo_bar)
@@ -1011,16 +1056,30 @@ class MainActivity : Activity() {
             openEditor(null, "")
             return
         }
+        // "gym tomorrow 18:00 45m" -> title "gym", tomorrow, 18:00, 45 minutes, category Gym.
+        val p = parseQuick(text, today, Store.categories)
         val t = Task()
-        t.title = text
-        t.date = targetDate()
-        if (tab == 0) t.categoryId = filter
+        t.title = p.title
+        t.date = if (p.hasDate) p.date else targetDate()
+        if ((p.time >= 0 || p.repeatMask != 0) && t.date == null) t.date = today
+        t.time = p.time
+        t.duration = p.duration
+        if (p.priority != 0) t.priority = p.priority
+        t.categoryId = if (p.categoryId.isNotEmpty()) p.categoryId else if (tab == 0) filter else ""
+        t.repeatMask = p.repeatMask
         Store.tasks.add(t)
         Store.save()
+        Reminders.schedule(this)
         input.setText("")
         render()
+        val row = rows.firstOrNull { it.task === t }?.view
+        if (row == null) {
+            // It went to another day or list, so say where, with a way back.
+            val where = t.date?.let { relDayInline(it, today) } ?: "Someday"
+            offerUndo("Added for $where") { Store.tasks.remove(t) }
+            return
+        }
         // The new task grows into the list, and the list scrolls to it.
-        val row = rows.firstOrNull { it.task === t }?.view ?: return
         expand(row, list.width - list.paddingLeft - list.paddingRight)
         scroll.post { scroll.smoothScrollTo(0, maxOf(0, row.top - dp(120))) }
     }

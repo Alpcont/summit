@@ -39,6 +39,12 @@
         </LinearLayout>
 
         <ImageButton
+            android:id="@+id/btn_stats"
+            style="@style/IconButton"
+            android:contentDescription="@string/progress"
+            android:src="@drawable/ic_stats" />
+
+        <ImageButton
             android:id="@+id/btn_settings"
             style="@style/IconButton"
             android:contentDescription="@string/settings"
@@ -85,6 +91,36 @@
         android:paddingEnd="16dp"
         android:paddingBottom="13dp"
         android:textColor="@color/accent"
+        android:textSize="14sp"
+        android:visibility="gone" />
+
+    <!-- A focus session is running. -->
+    <TextView
+        android:id="@+id/focus_banner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:background="@drawable/bg_accent_soft"
+        android:paddingStart="16dp"
+        android:paddingTop="13dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="13dp"
+        android:textColor="@color/accent"
+        android:textSize="14sp"
+        android:visibility="gone" />
+
+    <!-- Evening: time to set up tomorrow. -->
+    <TextView
+        android:id="@+id/plan_banner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:background="@drawable/bg_field"
+        android:paddingStart="16dp"
+        android:paddingTop="13dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="13dp"
+        android:textColor="@color/text_primary"
         android:textSize="14sp"
         android:visibility="gone" />
 
