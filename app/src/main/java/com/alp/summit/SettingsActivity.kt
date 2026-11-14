@@ -30,6 +30,7 @@ class SettingsActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        sheetMotion()
         Store.load(this)
         setContentView(R.layout.activity_simple)
         fitSystem(findViewById(R.id.root))
@@ -121,7 +122,7 @@ class SettingsActivity : Activity() {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
-        row.background = rounded(getColor(R.color.surface), dp(14))
+        row.background = rippled(rounded(getColor(R.color.surface), dp(14)), getColor(R.color.text_primary))
         row.setPadding(dp(16), 0, dp(16), 0)
         row.minimumHeight = dp(52)
         val name = TextView(this)

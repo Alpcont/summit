@@ -6,7 +6,6 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
-import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
@@ -15,6 +14,8 @@ import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.HorizontalScrollView
@@ -28,6 +29,12 @@ import java.time.YearMonth
 
 /** The main screen with its three pages: Today, Calendar and Someday. */
 class MainActivity : Activity() {
+    private companion object {
+        const val NONE = 0
+        const val PAGE = 1           // the whole page glides in
+        const val BELOW_HEADER = 2   // only the rows under the header glide in
+    }
+
     private lateinit var root: View
     private lateinit var scroll: ScrollView
     private lateinit var list: LinearLayout
@@ -42,6 +49,8 @@ class MainActivity : Activity() {
     private var filter = ""                          // category shown on Today, "" = all
     private var refreshHeader: () -> Unit = {}
     private var forceReview = false
+    private var firstShow = true
+    private var entering = false                     // true while a page is built to glide in
     private val scores = HashMap<LocalDate, TextView>()   // "2 of 5" labels in the calendar
     private var side = -1
 
@@ -54,7 +63,7 @@ class MainActivity : Activity() {
         list = findViewById(R.id.list)
         input = findViewById(R.id.quick_input)
         val tabs = findViewById<View>(R.id.tabs)
-        fitSystem(root) { keyboard -> tabs.visibility = if (keyboard) View.GONE else View.VISIBLE }
+        fitSystem(root, tabs)
 
         weekMode = prefs(this).getBoolean("weekMode", false)
         if (savedInstanceState != null) {
@@ -67,8 +76,11 @@ class MainActivity : Activity() {
         for (i in tabViews.indices) tabViews[i].setOnClickListener {
             if (tab != i) {
                 tab = i
-                render()
+                render(PAGE)
                 scroll.scrollTo(0, 0)
+                it.scaleX = 0.88f
+                it.scaleY = 0.88f
+                it.animate().scaleX(1f).scaleY(1f).setDuration(220).setInterpolator(OvershootInterpolator(3f)).start()
             }
         }
 
@@ -131,7 +143,8 @@ class MainActivity : Activity() {
             }
             today = now
         }
-        render()
+        render(if (firstShow) PAGE else NONE)
+        firstShow = false
         Reminders.schedule(this)
         maybeReview()
     }
@@ -140,7 +153,7 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         if (tab != 0) {
             tab = 0
-            render()
+            render(PAGE)
             scroll.scrollTo(0, 0)
         } else {
             @Suppress("DEPRECATION")
@@ -165,14 +178,21 @@ class MainActivity : Activity() {
 
     // ---------- Pages ----------
 
-    private fun render() {
+    /** Rebuilds the current page. `motion` says what should glide in: nothing, the whole page, or the part under the header. */
+    private fun render(motion: Int = NONE) {
         list.removeAllViews()
         scores.clear()
         refreshHeader = {}
+        entering = motion == PAGE
         when (tab) {
             0 -> renderToday()
             1 -> renderCalendar()
             else -> renderSomeday()
+        }
+        entering = false
+        if (motion != NONE) {
+            val from = if (motion == BELOW_HEADER) 1 else 0
+            enter((from until list.childCount).map { list.getChildAt(it) })
         }
         for (i in tabViews.indices) {
             val c = getColor(if (i == tab) R.color.accent else R.color.text_dim)
@@ -209,7 +229,7 @@ class MainActivity : Activity() {
         refreshHeader = {
             val all = Store.on(today)
             val done = all.count { it.isDone(today) }
-            summit.setProgress(if (all.isEmpty()) 0f else done.toFloat() / all.size, !first)
+            summit.setProgress(if (all.isEmpty()) 0f else done.toFloat() / all.size, !first || entering)
             first = false
             progress.text = when {
                 all.isEmpty() -> "No tasks yet"
@@ -281,7 +301,8 @@ class MainActivity : Activity() {
             mode("Today", false) {
                 selected = today
                 month = YearMonth.from(today)
-                render()
+                render(BELOW_HEADER)
+                slideIn(list.findViewById(R.id.cal_grid), 0)
             }
         }
 
@@ -292,9 +313,12 @@ class MainActivity : Activity() {
         grid.today = today
         grid.onSwipe = { shift(it) }
         grid.onSelect = {
+            val sameMonth = weekMode || YearMonth.from(it) == month
             selected = it
             month = YearMonth.from(it)
-            render()
+            render(BELOW_HEADER)
+            val fresh = list.findViewById<MonthGridView>(R.id.cal_grid)
+            if (sameMonth) fresh?.popSelection() else slideIn(fresh, 0)
         }
         refreshHeader = {
             grid.invalidate()
@@ -315,6 +339,7 @@ class MainActivity : Activity() {
                     selected = d
                     month = YearMonth.from(d)
                     render()
+                    list.findViewById<MonthGridView>(R.id.cal_grid)?.popSelection()
                 }
                 list.addView(heading)
                 val tasks = Store.on(d)
@@ -341,7 +366,8 @@ class MainActivity : Activity() {
         weekMode = on
         prefs(this).edit().putBoolean("weekMode", on).apply()
         month = YearMonth.from(selected)
-        render()
+        render(BELOW_HEADER)
+        slideIn(list.findViewById(R.id.cal_grid), 0)
     }
 
     private fun shift(dir: Int) {
@@ -352,7 +378,16 @@ class MainActivity : Activity() {
             selected = if (YearMonth.from(today) == m) today else m.atDay(1)
         }
         month = YearMonth.from(selected)
-        render()
+        render(BELOW_HEADER)
+        slideIn(list.findViewById(R.id.cal_grid), dir)
+    }
+
+    /** The calendar grid slides in from the side it was moved towards. */
+    private fun slideIn(grid: View?, dir: Int) {
+        if (grid == null) return
+        grid.alpha = 0f
+        grid.translationX = dir * dp(56).toFloat()
+        grid.animate().alpha(1f).translationX(0f).setDuration(240).setInterpolator(DecelerateInterpolator(1.6f)).start()
     }
 
     private fun renderSomeday() {
@@ -447,14 +482,39 @@ class MainActivity : Activity() {
             Reminders.schedule(this)
         }
 
-        // Ticking the box crosses the line out.
-        val title = row.findViewById<TextView>(R.id.title)
+        // Ticking the box draws a line through the title.
+        val title = row.findViewById<TitleView>(R.id.title)
         title.text = t.title
-        title.paintFlags =
-            if (done) title.paintFlags or Paint.STRIKE_THRU_TEXT_FLAG
-            else title.paintFlags and Paint.STRIKE_THRU_TEXT_FLAG.inv()
-        title.setTextColor(getColor(if (done) R.color.text_dim else R.color.text_primary))
+        title.setStruck(done, animate)
+        setMeta(row, t, d, animate)
 
+        row.setOnClickListener { openEditor(t, "", d) }
+        row.setOnLongClickListener {
+            rowMenu(row, t, d)
+            true
+        }
+
+        // Subtasks can be ticked right in the list. They fold away once the task is done.
+        val subs = row.findViewById<LinearLayout>(R.id.subs)
+        settle(subs)
+        val show = t.subtasks.isNotEmpty() && !done
+        if (animate && show != (subs.visibility == View.VISIBLE)) {
+            if (show) {
+                fillSubs(row, subs, t, d)
+                expand(subs, row.width)
+            } else {
+                collapse(subs) {}
+            }
+        } else {
+            subs.visibility = if (show) View.VISIBLE else View.GONE
+            if (show) fillSubs(row, subs, t, d) else subs.removeAllViews()
+        }
+    }
+
+    /** The small grey line under a title: time, duration, category and so on. */
+    private fun setMeta(row: View, t: Task, d: LocalDate?, animate: Boolean) {
+        val done = t.isDone(d)
+        val cat = Store.category(t.categoryId)
         val meta = row.findViewById<TextView>(R.id.meta)
         val sb = SpannableStringBuilder()
         fun part(text: String, color: Int = 0) {
@@ -476,40 +536,38 @@ class MainActivity : Activity() {
         if (t.notes.isNotBlank()) part("Note")
         meta.text = sb
         meta.visibility = if (sb.isEmpty()) View.GONE else View.VISIBLE
-        meta.alpha = if (done) 0.45f else 1f
+        val alpha = if (done) 0.45f else 1f
+        meta.animate().cancel()
+        if (animate) meta.animate().alpha(alpha).setDuration(220).start() else meta.alpha = alpha
+    }
 
-        row.setOnClickListener { openEditor(t, "", d) }
-        row.setOnLongClickListener {
-            rowMenu(row, t, d)
-            true
-        }
-
-        // Subtasks can be ticked right in the list. They fold away once the task is done.
-        val subs = row.findViewById<LinearLayout>(R.id.subs)
+    private fun fillSubs(row: View, subs: LinearLayout, t: Task, d: LocalDate?) {
         subs.removeAllViews()
-        subs.visibility = if (t.subtasks.isEmpty() || done) View.GONE else View.VISIBLE
-        if (!done) for (s in t.subtasks) {
+        for (s in t.subtasks) {
             val key = t.subKey(d, s)
-            val on = key in t.subDone
             val line = LinearLayout(this)
             line.orientation = LinearLayout.HORIZONTAL
             line.gravity = Gravity.CENTER_VERTICAL
             val sbox = BoxView(this)
             sbox.boxSize = 16f
             sbox.color = getColor(R.color.text_secondary)
-            sbox.setChecked(on, false)
+            sbox.setChecked(key in t.subDone, false)
             line.addView(sbox, LinearLayout.LayoutParams(dp(34), dp(34)))
-            val st = TextView(this)
+            val st = TitleView(this)
+            st.normalColor = getColor(R.color.text_secondary)
+            st.struckColor = getColor(R.color.text_dim)
             st.text = s.title
             st.textSize = 14f
-            st.setTextColor(getColor(if (on) R.color.text_dim else R.color.text_secondary))
-            if (on) st.paintFlags = st.paintFlags or Paint.STRIKE_THRU_TEXT_FLAG
+            st.setStruck(key in t.subDone, false)
             line.addView(st, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             line.setOnClickListener {
-                if (on) t.subDone.remove(key) else t.subDone.add(key)
+                val on = key !in t.subDone
+                if (on) t.subDone.add(key) else t.subDone.remove(key)
                 t.updated = System.currentTimeMillis()
                 Store.save()
-                bindRow(row, t, d, false)
+                sbox.setChecked(on, true)
+                st.setStruck(on, true)
+                setMeta(row, t, d, false)
             }
             subs.addView(line)
         }
@@ -537,19 +595,21 @@ class MainActivity : Activity() {
         m.setOnMenuItemClickListener {
             when (it.itemId) {
                 1 -> openEditor(t, "", d)
-                2 -> changed { Store.move(t, today) }
-                3 -> changed { Store.move(t, today.plusDays(1)) }
-                4 -> changed { Store.move(t, null) }
-                5 -> changed {
-                    if (d != null) t.skipDates.add(d.toString())
-                    t.updated = System.currentTimeMillis()
+                2 -> collapse(anchor) { changed { Store.move(t, today) } }
+                3 -> collapse(anchor) { changed { Store.move(t, today.plusDays(1)) } }
+                4 -> collapse(anchor) { changed { Store.move(t, null) } }
+                5 -> collapse(anchor) {
+                    changed {
+                        if (d != null) t.skipDates.add(d.toString())
+                        t.updated = System.currentTimeMillis()
+                    }
                 }
                 6 -> AlertDialog.Builder(this)
                     .setMessage("Delete \"${t.title}\" on every day it repeats?")
-                    .setPositiveButton("Delete") { _, _ -> changed { Store.tasks.remove(t) } }
+                    .setPositiveButton("Delete") { _, _ -> collapse(anchor) { changed { Store.tasks.remove(t) } } }
                     .setNegativeButton("Cancel", null)
                     .show()
-                7 -> changed { Store.tasks.remove(t) }
+                7 -> collapse(anchor) { changed { Store.tasks.remove(t) } }
             }
             true
         }
@@ -586,10 +646,10 @@ class MainActivity : Activity() {
         Store.save()
         input.setText("")
         render()
-        scroll.post {
-            val row = list.findViewWithTag<View>(t.id)
-            if (row != null) scroll.smoothScrollTo(0, maxOf(0, row.top - dp(120)))
-        }
+        // The new task grows into the list, and the list scrolls to it.
+        val row = list.findViewWithTag<View>(t.id) ?: return
+        expand(row, list.width - list.paddingLeft - list.paddingRight)
+        scroll.post { scroll.smoothScrollTo(0, maxOf(0, row.top - dp(120))) }
     }
 
     private fun openEditor(t: Task?, title: String, d: LocalDate? = null) {

@@ -1,5 +1,7 @@
 package com.alp.summit
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.app.Activity
 import android.content.Context
@@ -7,21 +9,29 @@ import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PathMeasure
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.content.res.ColorStateList
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
+import android.view.WindowInsetsAnimation
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import android.widget.TextView
 import java.time.LocalDate
 import java.time.YearMonth
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 
 // ---------- Small UI helpers ----------
 
@@ -42,26 +52,50 @@ fun withAlpha(color: Int, alpha: Int): Int = (color and 0x00FFFFFF) or (alpha sh
 
 /**
  * Draws behind the system bars and pads the screen so nothing is hidden by the status bar,
- * the navigation bar or the keyboard. `onKeyboard` tells whether the keyboard is showing.
+ * the navigation bar or the keyboard. The padding follows the keyboard while it slides, so
+ * the content moves with it instead of jumping. `covered` is a bottom bar the keyboard may
+ * simply slide over (the tabs on the main screen).
  */
-fun Activity.fitSystem(root: View, onKeyboard: ((Boolean) -> Unit)? = null) {
-    if (Build.VERSION.SDK_INT >= 30) window.setDecorFitsSystemWindows(false)
-    root.setOnApplyWindowInsetsListener { v, insets ->
-        if (Build.VERSION.SDK_INT >= 30) {
-            val i = insets.getInsets(
-                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout() or WindowInsets.Type.ime()
-            )
-            v.setPadding(i.left, i.top, i.right, i.bottom)
-            onKeyboard?.invoke(insets.isVisible(WindowInsets.Type.ime()))
-        } else {
+fun Activity.fitSystem(root: View, covered: View? = null) {
+    if (Build.VERSION.SDK_INT < 30) {
+        root.setOnApplyWindowInsetsListener { v, insets ->
             @Suppress("DEPRECATION")
             v.setPadding(
                 insets.systemWindowInsetLeft, insets.systemWindowInsetTop,
                 insets.systemWindowInsetRight, insets.systemWindowInsetBottom
             )
+            insets
         }
+        return
+    }
+    window.setDecorFitsSystemWindows(false)
+    var sliding = false
+    fun pad(insets: WindowInsets) {
+        val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+        val keyboard = insets.getInsets(WindowInsets.Type.ime()).bottom - (covered?.height ?: 0)
+        root.setPadding(bars.left, bars.top, bars.right, max(bars.bottom, keyboard))
+    }
+    root.setOnApplyWindowInsetsListener { _, insets ->
+        if (!sliding) pad(insets)
         insets
     }
+    root.setWindowInsetsAnimationCallback(object : WindowInsetsAnimation.Callback(DISPATCH_MODE_STOP) {
+        override fun onPrepare(animation: WindowInsetsAnimation) {
+            if (animation.typeMask and WindowInsets.Type.ime() != 0) sliding = true
+        }
+
+        override fun onProgress(insets: WindowInsets, running: MutableList<WindowInsetsAnimation>): WindowInsets {
+            if (sliding) pad(insets)
+            return insets
+        }
+
+        override fun onEnd(animation: WindowInsetsAnimation) {
+            if (animation.typeMask and WindowInsets.Type.ime() != 0) {
+                sliding = false
+                root.rootWindowInsets?.let { pad(it) }
+            }
+        }
+    })
 }
 
 /** On the tablet, keep a screen's content in a comfortable centred column. */
@@ -72,6 +106,93 @@ fun centerColumn(root: View, body: View) {
         val pad = base + max(0, (w - root.dp(720)) / 2)
         if (pad != body.paddingLeft) root.post { body.setPadding(pad, body.paddingTop, pad, body.paddingBottom) }
     }
+}
+
+/** Adds a touch ripple on top of a rounded background. */
+fun rippled(background: GradientDrawable, tint: Int): Drawable =
+    RippleDrawable(
+        ColorStateList.valueOf(withAlpha(tint, 0x40)), background,
+        rounded(-1, background.cornerRadius.toInt())   // the shape the ripple stays inside
+    )
+
+/** Rows glide in one after another when a page appears. */
+fun enter(views: List<View>) {
+    for ((i, v) in views.withIndex()) {
+        v.animate().cancel()
+        v.alpha = 0f
+        v.translationY = v.dp(14).toFloat()
+        v.animate().alpha(1f).translationY(0f)
+            .setStartDelay(min(i, 10) * 22L).setDuration(240)
+            .setInterpolator(DecelerateInterpolator(1.6f)).start()
+    }
+}
+
+/** A screen that rises in over the main page and sinks away when it is closed. */
+fun Activity.sheetMotion() {
+    if (Build.VERSION.SDK_INT >= 34) {
+        overrideActivityTransition(Activity.OVERRIDE_TRANSITION_OPEN, R.anim.sheet_in, R.anim.stay)
+        overrideActivityTransition(Activity.OVERRIDE_TRANSITION_CLOSE, R.anim.stay, R.anim.sheet_out)
+    } else {
+        @Suppress("DEPRECATION")
+        overridePendingTransition(R.anim.sheet_in, R.anim.stay)
+    }
+}
+
+/** Finishes a running expand/collapse on this view at once. */
+fun settle(v: View) {
+    (v.getTag(R.id.root) as? Animator)?.cancel()
+}
+
+/** Grows a view from nothing to its natural height. `width` is the room it has. */
+fun expand(v: View, width: Int) {
+    settle(v)
+    v.visibility = View.VISIBLE
+    v.measure(
+        View.MeasureSpec.makeMeasureSpec(max(width, 0), View.MeasureSpec.EXACTLY),
+        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+    )
+    resize(v, 0, v.measuredHeight, 0f, 1f) {}
+}
+
+/** Shrinks a view away, then runs `end`. */
+fun collapse(v: View, end: () -> Unit) {
+    settle(v)
+    if (v.visibility != View.VISIBLE || v.height == 0) {
+        v.visibility = View.GONE
+        end()
+        return
+    }
+    resize(v, v.height, 0, 1f, 0f) {
+        v.visibility = View.GONE
+        end()
+    }
+}
+
+private fun resize(v: View, from: Int, to: Int, alphaFrom: Float, alphaTo: Float, end: () -> Unit) {
+    val lp = v.layoutParams
+    lp.height = from
+    v.layoutParams = lp
+    v.alpha = alphaFrom
+    val a = ValueAnimator.ofFloat(0f, 1f)
+    a.duration = 220
+    a.interpolator = DecelerateInterpolator(1.6f)
+    a.addUpdateListener {
+        val f = it.animatedValue as Float
+        lp.height = (from + (to - from) * f).toInt()
+        v.layoutParams = lp
+        v.alpha = alphaFrom + (alphaTo - alphaFrom) * f
+    }
+    a.addListener(object : AnimatorListenerAdapter() {
+        override fun onAnimationEnd(animation: Animator) {
+            v.setTag(R.id.root, null)
+            lp.height = ViewGroup.LayoutParams.WRAP_CONTENT
+            v.layoutParams = lp
+            v.alpha = 1f
+            end()
+        }
+    })
+    v.setTag(R.id.root, a)
+    a.start()
 }
 
 /** A pill-shaped choice. Selected pills take the tint colour. */
@@ -85,10 +206,10 @@ fun Context.chip(text: CharSequence, selected: Boolean, tint: Int = getColor(R.c
     if (selected) {
         tv.setTextColor(tint)
         tv.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        tv.background = rounded(withAlpha(tint, 0x2E), dp(20), withAlpha(tint, 0x99), dp(1))
+        tv.background = rippled(rounded(withAlpha(tint, 0x2E), dp(20), withAlpha(tint, 0x99), dp(1)), tint)
     } else {
         tv.setTextColor(getColor(R.color.text_secondary))
-        tv.background = rounded(getColor(R.color.surface), dp(20))
+        tv.background = rippled(rounded(getColor(R.color.surface), dp(20)), tint)
     }
     return tv
 }
@@ -114,6 +235,9 @@ class BoxView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = nul
         strokeJoin = Paint.Join.ROUND
     }
     private val path = Path()
+    private val drawn = Path()
+    private val measure = PathMeasure()
+    private val pop = OvershootInterpolator(3f)
     private val rect = RectF()
     private val outlineColor = ctx.getColor(R.color.text_dim)
     private val tickColor = ctx.getColor(R.color.bg)
@@ -129,7 +253,7 @@ class BoxView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = nul
             return
         }
         anim = ValueAnimator.ofFloat(p, target).apply {
-            duration = 180
+            duration = if (value) 260 else 160
             addUpdateListener {
                 p = it.animatedValue as Float
                 invalidate()
@@ -151,21 +275,88 @@ class BoxView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = nul
             c.drawRoundRect(rect, r, r, outline)
         }
         if (p > 0f) {
-            val k = 0.8f + 0.2f * p
+            // The box pops in slightly past its size, then the tick is drawn stroke by stroke.
+            val k = if (checked) 0.6f + 0.4f * pop.getInterpolation(p) else 0.8f + 0.2f * p
             c.save()
             c.scale(k, k, rect.centerX(), rect.centerY())
             fill.color = color
-            fill.alpha = (255 * p).toInt()
+            fill.alpha = (255 * min(1f, p * 2f)).toInt()
             c.drawRoundRect(rect, r, r, fill)
-            tick.color = tickColor
-            tick.alpha = (255 * p).toInt()
-            tick.strokeWidth = s * 0.11f
-            path.rewind()
-            path.moveTo(l + s * 0.27f, t + s * 0.52f)
-            path.lineTo(l + s * 0.43f, t + s * 0.68f)
-            path.lineTo(l + s * 0.74f, t + s * 0.34f)
-            c.drawPath(path, tick)
+            val t2 = ((p - 0.35f) / 0.65f).coerceIn(0f, 1f)
+            if (t2 > 0f) {
+                tick.color = tickColor
+                tick.strokeWidth = s * 0.11f
+                path.rewind()
+                path.moveTo(l + s * 0.27f, t + s * 0.52f)
+                path.lineTo(l + s * 0.43f, t + s * 0.68f)
+                path.lineTo(l + s * 0.74f, t + s * 0.34f)
+                measure.setPath(path, false)
+                drawn.rewind()
+                measure.getSegment(0f, measure.length * t2, drawn, true)
+                c.drawPath(drawn, tick)
+            }
             c.restore()
+        }
+    }
+}
+
+// ---------- Task title with a line that draws itself across ----------
+
+class TitleView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = null) : TextView(ctx, attrs) {
+    var normalColor: Int = ctx.getColor(R.color.text_primary)
+    var struckColor: Int = ctx.getColor(R.color.text_dim)
+    private var strike = 0f
+    private var anim: ValueAnimator? = null
+    private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
+
+    fun setStruck(on: Boolean, animate: Boolean) {
+        val target = if (on) 1f else 0f
+        anim?.cancel()
+        anim = null
+        if (!animate || strike == target) {
+            show(target)
+            return
+        }
+        anim = ValueAnimator.ofFloat(strike, target).apply {
+            duration = 260
+            interpolator = DecelerateInterpolator(1.4f)
+            addUpdateListener { show(it.animatedValue as Float) }
+            start()
+        }
+    }
+
+    private fun show(value: Float) {
+        strike = value
+        setTextColor(blend(normalColor, struckColor, value))
+        invalidate()
+    }
+
+    private fun blend(a: Int, b: Int, f: Float): Int {
+        fun ch(shift: Int): Int {
+            val x = (a shr shift) and 0xFF
+            val y = (b shr shift) and 0xFF
+            return ((x + (y - x) * f).toInt() and 0xFF) shl shift
+        }
+        return ch(24) or ch(16) or ch(8) or ch(0)
+    }
+
+    override fun onDraw(c: Canvas) {
+        super.onDraw(c)
+        val l = layout ?: return
+        if (strike <= 0f) return
+        line.color = currentTextColor
+        line.strokeWidth = max(textSize * 0.07f, resources.displayMetrics.density * 1.4f)
+        var total = 0f
+        for (i in 0 until l.lineCount) total += l.getLineWidth(i)
+        var left = total * strike
+        for (i in 0 until l.lineCount) {
+            if (left <= 0f) break
+            val w = l.getLineWidth(i)
+            val x = compoundPaddingLeft + l.getLineLeft(i)
+            val y = extendedPaddingTop + l.getLineBaseline(i) - textSize * 0.32f
+            val seg = min(w, left)
+            c.drawLine(x, y, x + seg, y, line)
+            left -= seg
         }
     }
 }
@@ -182,6 +373,10 @@ class SummitView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = 
     private val peakX = 0.84f
     private var shown = 0f
     private var anim: ValueAnimator? = null
+    private var burst = 1f                       // 0..1 while the summit celebration plays
+    private var burstAnim: ValueAnimator? = null
+    private val overshoot = OvershootInterpolator(2.5f)
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val accent = ctx.getColor(R.color.accent)
     private val base = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -201,15 +396,37 @@ class SummitView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = 
         val target = value.coerceIn(0f, 1f)
         anim?.cancel()
         anim = null
+        burstAnim?.cancel()
+        burstAnim = null
+        burst = 1f
         if (!animate || target == shown) {
             shown = target
             invalidate()
             return
         }
         anim = ValueAnimator.ofFloat(shown, target).apply {
-            duration = 450
+            duration = 520
+            interpolator = DecelerateInterpolator(1.6f)
             addUpdateListener {
                 shown = it.animatedValue as Float
+                invalidate()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    if (shown >= 1f) celebrate()
+                }
+            })
+            start()
+        }
+    }
+
+    /** The flag springs up and a ring spreads out from the peak. */
+    private fun celebrate() {
+        burst = 0f
+        burstAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 750
+            addUpdateListener {
+                burst = it.animatedValue as Float
                 invalidate()
             }
             start()
@@ -274,13 +491,19 @@ class SummitView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = 
             c.restore()
         }
         if (shown >= 1f) {
+            if (burst < 1f) {
+                ring.color = withAlpha(accent, (200 * (1f - burst)).toInt())
+                ring.strokeWidth = 2f * d
+                c.drawCircle(x, y, (6f + 30f * burst) * d, ring)
+            }
             // Flag on the summit.
-            val top = y - 13f * d
+            val k = if (burst < 1f) overshoot.getInterpolation(min(1f, burst * 2f)) else 1f
+            val top = y - 13f * d * k
             c.drawLine(x, y, x, top, lit)
             flag.rewind()
             flag.moveTo(x, top)
-            flag.lineTo(x + 9f * d, top + 3.5f * d)
-            flag.lineTo(x, top + 7f * d)
+            flag.lineTo(x + 9f * d * k, top + 3.5f * d * k)
+            flag.lineTo(x, top + 7f * d * k)
             flag.close()
             c.drawPath(flag, dot)
         } else {
@@ -361,6 +584,20 @@ class MonthGridView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet?
     private val bar = RectF()
     private var downX = 0f
     private var downY = 0f
+    private var pop = 1f
+
+    /** Lets the circle of the selected day grow in. */
+    fun popSelection() {
+        ValueAnimator.ofFloat(0.55f, 1f).apply {
+            duration = 240
+            interpolator = OvershootInterpolator(2.5f)
+            addUpdateListener {
+                pop = it.animatedValue as Float
+                invalidate()
+            }
+            start()
+        }
+    }
 
     /** The Monday the grid starts on. */
     private fun first(): LocalDate {
@@ -398,7 +635,7 @@ class MonthGridView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet?
                 if (isSel) {
                     shape.style = Paint.Style.FILL
                     shape.color = accent
-                    c.drawCircle(cx, cy, 16f * d, shape)
+                    c.drawCircle(cx, cy, 16f * d * pop, shape)
                 } else if (isToday) {
                     shape.style = Paint.Style.STROKE
                     shape.strokeWidth = 1.5f * d

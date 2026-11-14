@@ -26,6 +26,7 @@ class ReviewActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        sheetMotion()
         Store.load(this)
         setContentView(R.layout.activity_simple)
         fitSystem(findViewById(R.id.root))
