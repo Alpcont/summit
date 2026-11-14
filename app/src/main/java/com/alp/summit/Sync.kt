@@ -197,8 +197,13 @@ object Sync {
     /** Shows Google's account chooser. `done` gets null on success, otherwise a message to show. */
     fun signIn(activity: Activity, done: (String?) -> Unit) {
         val id = activity.resources.getIdentifier("default_web_client_id", "string", activity.packageName)
-        if (!configured(activity) || id == 0) {
+        if (!configured(activity)) {
             done("Sync is not set up yet.")
+            return
+        }
+        if (id == 0) {
+            // The Firebase file was downloaded before Google sign-in was switched on.
+            done("Google sign-in is missing from the Firebase file. Enable Google under Authentication, download google-services.json again and replace it.")
             return
         }
         val request = GetCredentialRequest.Builder()
@@ -228,7 +233,7 @@ object Sync {
                 }
 
                 override fun onError(e: GetCredentialException) {
-                    done(e.message ?: "Sign-in was cancelled.")
+                    done("Sign-in did not finish: " + (e.message ?: e.type))
                 }
             }
         )
