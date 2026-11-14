@@ -37,6 +37,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
     var spent = 0                      // minutes of focus time logged on this task
     var created = System.currentTimeMillis()
     var updated = created
+    var syncHash = 0                   // fingerprint of the content last exchanged with the cloud; 0 = never
 
     val repeating: Boolean get() = repeatMask != 0 && date != null
 
@@ -55,6 +56,17 @@ class Task(val id: String = UUID.randomUUID().toString()) {
 
     fun subKey(d: LocalDate?, s: Subtask): String =
         (if (repeating && d != null) d.toString() else "") + "|" + s.id
+
+    /** Takes over everything from another copy of the same task (one that arrived from another device). */
+    fun assign(o: Task) {
+        title = o.title; notes = o.notes; date = o.date; time = o.time; duration = o.duration
+        priority = o.priority; categoryId = o.categoryId; repeatMask = o.repeatMask; endDate = o.endDate
+        remind = o.remind; done = o.done; rank = o.rank; spent = o.spent; created = o.created; updated = o.updated
+        doneDates.clear(); doneDates.addAll(o.doneDates)
+        skipDates.clear(); skipDates.addAll(o.skipDates)
+        subDone.clear(); subDone.addAll(o.subDone)
+        subtasks.clear(); subtasks.addAll(o.subtasks)
+    }
 
     /** A one-off copy of this task on another day (used when a missed repeat is moved). */
     fun copyTo(d: LocalDate): Task {
@@ -75,6 +87,12 @@ object Store {
     val tasks = ArrayList<Task>()
     val categories = ArrayList<Category>()
     val focusLog = HashMap<String, Int>()   // day -> minutes of focus time
+
+    // Bookkeeping for sync between devices (see Sync.kt).
+    val syncedIds = HashSet<String>()       // tasks the cloud knows about; one missing here was deleted
+    var catsUpdated = 0L
+    var catsSyncHash = 0
+    var focusSyncHash = 0
     private var file: File? = null
     private var app: Context? = null
 
@@ -122,14 +140,18 @@ object Store {
     @Synchronized
     fun save() {
         val f = file ?: return
+        // Changes since the last save are handed to the cloud first (does nothing when not signed in).
+        app?.let { Sync.beforeSave(it) }
         val o = JSONObject()
         o.put("version", 1)
         val cs = JSONArray()
         for (c in categories) cs.put(JSONObject().put("id", c.id).put("name", c.name).put("color", c.color))
         o.put("categories", cs)
         val ts = JSONArray()
-        for (t in tasks) ts.put(toJson(t))
+        for (t in tasks) ts.put(taskJson(t).put("syncHash", t.syncHash))
         o.put("tasks", ts)
+        o.put("syncedIds", JSONArray(syncedIds.toList()))
+        o.put("catsUpdated", catsUpdated).put("catsSyncHash", catsSyncHash).put("focusSyncHash", focusSyncHash)
         val fs = JSONObject()
         for ((day, minutes) in focusLog) fs.put(day, minutes)
         o.put("focus", fs)
@@ -144,7 +166,7 @@ object Store {
         app?.let { TodayWidget.refresh(it) }
     }
 
-    private fun toJson(t: Task): JSONObject {
+    fun taskJson(t: Task): JSONObject {
         val o = JSONObject()
         o.put("id", t.id).put("title", t.title).put("notes", t.notes)
         o.put("date", t.date?.toString() ?: "")
@@ -152,12 +174,12 @@ object Store {
         o.put("category", t.categoryId).put("repeat", t.repeatMask)
         o.put("end", t.endDate?.toString() ?: "")
         o.put("remind", t.remind).put("done", t.done)
-        o.put("doneDates", JSONArray(t.doneDates.toList()))
-        o.put("skipDates", JSONArray(t.skipDates.toList()))
+        o.put("doneDates", JSONArray(t.doneDates.sorted()))
+        o.put("skipDates", JSONArray(t.skipDates.sorted()))
         val ss = JSONArray()
         for (s in t.subtasks) ss.put(JSONObject().put("id", s.id).put("title", s.title))
         o.put("subtasks", ss)
-        o.put("subDone", JSONArray(t.subDone.toList()))
+        o.put("subDone", JSONArray(t.subDone.sorted()))
         o.put("rank", t.rank).put("spent", t.spent)
         o.put("created", t.created).put("updated", t.updated)
         return o
@@ -170,35 +192,41 @@ object Store {
             categories.add(Category(c.getString("id"), c.getString("name"), c.getInt("color")))
         }
         val ts = o.optJSONArray("tasks") ?: JSONArray()
-        for (i in 0 until ts.length()) {
-            val j = ts.getJSONObject(i)
-            val t = Task(j.getString("id"))
-            t.title = j.optString("title")
-            t.notes = j.optString("notes")
-            t.date = j.optString("date").takeIf { it.isNotEmpty() }?.let { LocalDate.parse(it) }
-            t.time = j.optInt("time", -1)
-            t.duration = j.optInt("duration", 0)
-            t.priority = j.optInt("priority", 2)
-            t.categoryId = j.optString("category")
-            t.repeatMask = j.optInt("repeat", 0)
-            t.endDate = j.optString("end").takeIf { it.isNotEmpty() }?.let { LocalDate.parse(it) }
-            t.remind = j.optInt("remind", 0)
-            t.done = j.optBoolean("done", false)
-            strings(j.optJSONArray("doneDates"), t.doneDates)
-            strings(j.optJSONArray("skipDates"), t.skipDates)
-            strings(j.optJSONArray("subDone"), t.subDone)
-            val ss = j.optJSONArray("subtasks") ?: JSONArray()
-            for (k in 0 until ss.length()) {
-                val s = ss.getJSONObject(k)
-                t.subtasks.add(Subtask(s.getString("id"), s.optString("title")))
-            }
-            t.rank = j.optDouble("rank", -1.0)
-            t.spent = j.optInt("spent", 0)
-            t.created = j.optLong("created", System.currentTimeMillis())
-            t.updated = j.optLong("updated", t.created)
-            tasks.add(t)
-        }
+        for (i in 0 until ts.length()) tasks.add(taskFromJson(ts.getJSONObject(i)))
         readFocus(o)
+        strings(o.optJSONArray("syncedIds"), syncedIds)
+        catsUpdated = o.optLong("catsUpdated", 0L)
+        catsSyncHash = o.optInt("catsSyncHash", 0)
+        focusSyncHash = o.optInt("focusSyncHash", 0)
+    }
+
+    fun taskFromJson(j: JSONObject): Task {
+        val t = Task(j.getString("id"))
+        t.title = j.optString("title")
+        t.notes = j.optString("notes")
+        t.date = j.optString("date").takeIf { it.isNotEmpty() }?.let { LocalDate.parse(it) }
+        t.time = j.optInt("time", -1)
+        t.duration = j.optInt("duration", 0)
+        t.priority = j.optInt("priority", 2)
+        t.categoryId = j.optString("category")
+        t.repeatMask = j.optInt("repeat", 0)
+        t.endDate = j.optString("end").takeIf { it.isNotEmpty() }?.let { LocalDate.parse(it) }
+        t.remind = j.optInt("remind", 0)
+        t.done = j.optBoolean("done", false)
+        strings(j.optJSONArray("doneDates"), t.doneDates)
+        strings(j.optJSONArray("skipDates"), t.skipDates)
+        strings(j.optJSONArray("subDone"), t.subDone)
+        val ss = j.optJSONArray("subtasks") ?: JSONArray()
+        for (k in 0 until ss.length()) {
+            val s = ss.getJSONObject(k)
+            t.subtasks.add(Subtask(s.getString("id"), s.optString("title")))
+        }
+        t.rank = j.optDouble("rank", -1.0)
+        t.spent = j.optInt("spent", 0)
+        t.created = j.optLong("created", System.currentTimeMillis())
+        t.updated = j.optLong("updated", t.created)
+        t.syncHash = j.optInt("syncHash", 0)
+        return t
     }
 
     private fun readFocus(o: JSONObject) {
@@ -307,6 +335,123 @@ object Store {
         if (minutes <= 0) return
         if (t != null) t.spent += minutes
         focusLog[d.toString()] = (focusLog[d.toString()] ?: 0) + minutes
+    }
+
+    // ----- Sync between devices: what changed here, and taking in what changed elsewhere -----
+
+    /** A fingerprint of everything in a task except its timestamps. */
+    fun contentHash(t: Task): Int {
+        val j = taskJson(t)
+        j.remove("updated")
+        val h = j.toString().hashCode()
+        return if (h == 0) 1 else h
+    }
+
+    fun categoriesHash(list: List<Category> = categories): Int {
+        val h = list.joinToString(";") { it.id + "|" + it.name + "|" + it.color }.hashCode()
+        return if (h == 0) 1 else h
+    }
+
+    fun focusHash(): Int {
+        val h = focusLog.toSortedMap().toString().hashCode()
+        return if (h == 0) 1 else h
+    }
+
+    private fun clean(t: Task): Boolean = t.syncHash != 0 && contentHash(t) == t.syncHash
+
+    /** A task as another device saved it. Returns true if something here changed. */
+    fun applyRemoteTask(id: String, j: JSONObject): Boolean {
+        val local = task(id)
+        val remoteUpdated = j.optLong("updated", 0L)
+        if (j.optBoolean("deleted", false)) {
+            syncedIds.remove(id)
+            if (local == null) return false
+            // Edited here after it was deleted elsewhere: the edit wins and goes back up.
+            if (!clean(local) && local.updated > remoteUpdated) {
+                local.syncHash = 0
+                return false
+            }
+            tasks.remove(local)
+            return true
+        }
+        j.put("id", id)
+        val remote = taskFromJson(j)
+        val h = contentHash(remote)
+        syncedIds.add(id)
+        if (local == null) {
+            remote.syncHash = h
+            tasks.add(remote)
+            return true
+        }
+        if (contentHash(local) == h) {
+            local.syncHash = h
+            return false
+        }
+        // Both sides changed: the later change wins.
+        if (!clean(local) && local.updated >= remoteUpdated) return false
+        local.assign(remote)
+        local.syncHash = h
+        return true
+    }
+
+    /** The category list as another device saved it. */
+    fun applyRemoteCategories(j: JSONObject): Boolean {
+        val items = j.optJSONArray("items") ?: return false
+        val remote = ArrayList<Category>()
+        for (i in 0 until items.length()) {
+            val c = items.getJSONObject(i)
+            remote.add(Category(c.getString("id"), c.optString("name"), c.optInt("color")))
+        }
+        val remoteHash = categoriesHash(remote)
+        if (catsSyncHash == 0) {
+            // First contact: join both lists. Same name = same category, the cloud's copy is kept.
+            val merged = ArrayList(remote)
+            for (c in categories) {
+                if (merged.any { it.id == c.id }) continue
+                val same = merged.firstOrNull { it.name.equals(c.name, ignoreCase = true) }
+                if (same == null) merged.add(c)
+                else for (t in tasks) if (t.categoryId == c.id) t.categoryId = same.id
+            }
+            categories.clear()
+            categories.addAll(merged)
+            catsSyncHash = remoteHash
+            catsUpdated = j.optLong("updated", 0L)
+            return true
+        }
+        val localHash = categoriesHash()
+        if (remoteHash == localHash) {
+            catsSyncHash = localHash
+            return false
+        }
+        if (localHash != catsSyncHash && catsUpdated >= j.optLong("updated", 0L)) return false
+        categories.clear()
+        categories.addAll(remote)
+        catsSyncHash = remoteHash
+        catsUpdated = j.optLong("updated", 0L)
+        return true
+    }
+
+    /** Focus minutes per day from another device: the larger number wins, so nothing is ever lost. */
+    fun applyRemoteFocus(j: JSONObject): Boolean {
+        val days = j.optJSONObject("days") ?: return false
+        var changed = false
+        for (day in days.keys()) {
+            val minutes = days.optInt(day, 0)
+            if (minutes > (focusLog[day] ?: 0)) {
+                focusLog[day] = minutes
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    /** Forget what was exchanged, e.g. when another account signs in. */
+    fun resetSync() {
+        for (t in tasks) t.syncHash = 0
+        syncedIds.clear()
+        catsSyncHash = 0
+        catsUpdated = 0L
+        focusSyncHash = 0
     }
 
     // ----- Changes -----

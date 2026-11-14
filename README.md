@@ -5,7 +5,9 @@ crossed out; a small mountain on the main page lights up as the day gets done. T
 one-off, repeating, timed or parked in "Someday", and carry a colour category, priority,
 subtasks, notes and an estimated duration. A calendar (month and week) shows how each day
 went, a morning review asks what to do with anything left unfinished, and timed tasks send
-reminders. Everything is stored on the device; the app uses no internet.
+reminders. Everything is stored on the device. Optionally, phone and tablet are kept the same
+through a Firebase project of your own (sign in with Google in Settings); only then does the
+app use the internet.
 
 ## Download
 https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
@@ -43,11 +45,22 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
 - **Evening planning**: a nudge at 21:30 (changeable) opens a screen to set up tomorrow:
   add tasks, carry over what is still open, pull tasks from Someday.
 
+## Sync and phone calendar
+- **Phone calendar**: Settings → Show calendar events. Classes and appointments from the
+  phone's calendar then appear above the tasks of each day. Summit only reads them.
+- **Sync**: needs the file `app/google-services.json` from your Firebase project (Android app
+  `com.alp.summit`, Google sign-in enabled, Firestore created). Once the file is in the repo,
+  the next build has sync: Settings → Sign in with Google, on both devices.
+- How sync decides: each task is compared separately; if both devices changed the same task,
+  the later change wins. Deleting a task on one device deletes it on the other.
+- Firestore rules that keep the data private to your account are in the chat with Claude and
+  in the Firebase console (Firestore → Rules).
+
 ## Plan
 1. **Done**: tasks, calendar, morning review, reminders, categories.
 2. **Done**: home-screen widget, streaks and stats, focus timer, smart quick-add, evening planning.
-3. Next: sync between phone and tablet (Firebase + Google sign-in), phone calendar events
-   shown next to tasks.
+3. **Done**: phone calendar events next to tasks; sync between phone and tablet (active once
+   the Firebase file is added).
 
 ## Ideas for later
 - A "day starts at" hour, so tasks finished after midnight still count for the day before.

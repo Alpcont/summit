@@ -152,6 +152,7 @@ class MainActivity : Activity() {
             p.edit().putBoolean("askedNotifications", true).apply()
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
+        Sync.start(this)
         forceReview = intent?.getBooleanExtra("review", false) == true
         openPlan = intent?.getBooleanExtra("plan", false) == true
     }
@@ -193,6 +194,8 @@ class MainActivity : Activity() {
         }
         render(if (firstShow) PAGE else NONE)
         firstShow = false
+        // Changes from the other device slide into place while the app is open.
+        Sync.onRemoteChange = { if (!gestureActive) renderMoving() }
         Reminders.schedule(this)
         if (openPlan) {
             openPlan = false
@@ -220,6 +223,11 @@ class MainActivity : Activity() {
             return true
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        Sync.onRemoteChange = null
     }
 
     @Deprecated("Deprecated in Java")
@@ -371,6 +379,7 @@ class MainActivity : Activity() {
             for (c in used) add(c.name, c.id, c.color)
         }
 
+        addEvents(today)
         val shown = all.filter { filter.isEmpty() || it.categoryId == filter }
         if (shown.isEmpty()) list.addView(emptyText("A clear day.\nAdd your first task below."))
         for (t in shown) list.addView(taskRow(t, today))
@@ -426,6 +435,7 @@ class MainActivity : Activity() {
 
         if (!weekMode) {
             list.addView(dayHeading(selected, true))
+            addEvents(selected)
             val tasks = Store.on(selected)
             if (tasks.isEmpty()) list.addView(emptyText("Nothing planned for this day."))
             for (t in tasks) list.addView(taskRow(t, selected))
@@ -441,8 +451,9 @@ class MainActivity : Activity() {
                     list.findViewById<MonthGridView>(R.id.cal_grid)?.popSelection()
                 }
                 list.addView(heading)
+                val events = addEvents(d)
                 val tasks = Store.on(d)
-                if (tasks.isEmpty()) {
+                if (tasks.isEmpty() && events == 0) {
                     val none = TextView(this)
                     none.text = "—"
                     none.setTextColor(getColor(R.color.text_dim))
@@ -532,6 +543,40 @@ class MainActivity : Activity() {
         tv.setTextColor(getColor(R.color.text_dim))
         tv.setPadding(0, dp(22), 0, dp(12))
         return tv
+    }
+
+    /** Lines for the phone calendar's events of a day (if switched on in Settings). Returns how many. */
+    private fun addEvents(d: LocalDate): Int {
+        val events = PhoneCalendar.on(this, d)
+        for (e in events) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.setPadding(0, dp(7), 0, dp(7))
+            val bar = View(this)
+            bar.background = rounded(e.color, dp(2))
+            val lp = LinearLayout.LayoutParams(dp(3), dp(32))
+            lp.marginStart = dp(10)
+            lp.marginEnd = dp(24)
+            row.addView(bar, lp)
+            val words = LinearLayout(this)
+            words.orientation = LinearLayout.VERTICAL
+            val title = TextView(this)
+            title.text = e.title
+            title.textSize = 15f
+            title.setTextColor(getColor(R.color.text_primary))
+            words.addView(title)
+            val sub = TextView(this)
+            sub.text = (if (e.allDay) "All day" else fmtTime(e.start) + " – " + fmtTime(e.end % (24 * 60))) +
+                (if (e.place.isNotBlank()) "  ·  " + e.place else "")
+            sub.textSize = 13f
+            sub.maxLines = 1
+            sub.setTextColor(getColor(R.color.text_secondary))
+            words.addView(sub)
+            row.addView(words, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            list.addView(row)
+        }
+        return events.size
     }
 
     /** "Tuesday 17 November" with that day's score on the right. */

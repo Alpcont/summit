@@ -19,6 +19,7 @@ import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import java.util.UUID
 
 /** Morning nudge, categories and reminder help. */
@@ -84,6 +85,44 @@ class SettingsActivity : Activity() {
         }
         row("Plan tomorrow now", "›", 0) { startActivity(Intent(this, PlanActivity::class.java)) }
         note("A notification in the evening that opens a short screen to set up tomorrow.")
+
+        label("Phone calendar")
+        val events = PhoneCalendar.enabled(this)
+        row("Show calendar events", if (events) "On" else "Off", if (events) getColor(R.color.accent) else 0) {
+            p.edit().putBoolean("showEvents", !events).apply()
+            if (!events && !PhoneCalendar.allowed(this)) {
+                requestPermissions(arrayOf(Manifest.permission.READ_CALENDAR), 2)
+            } else {
+                render()
+            }
+        }
+        note("Classes and appointments from the phone's calendar appear above your tasks. Summit only reads them.")
+
+        label("Sync")
+        if (!Sync.configured(this)) {
+            note("Sync between phone and tablet is not set up yet. It switches on once the Firebase file is added to the project.")
+        } else {
+            val account = Sync.account(this)
+            if (account == null) {
+                row("Sign in with Google", "›", getColor(R.color.accent)) {
+                    Sync.signIn(this) { problem ->
+                        if (problem != null) Toast.makeText(this, problem, Toast.LENGTH_LONG).show()
+                        render()
+                    }
+                }
+                note("Sign in with the same Google account on phone and tablet to keep them the same.")
+            } else {
+                row(account, "On", getColor(R.color.accent)) {}
+                row("Sign out on this device", "›", 0) {
+                    Sync.signOut(this)
+                    render()
+                }
+                note(
+                    "Tasks, categories and focus time are kept the same on every device signed in with this account." +
+                        (if (Sync.lastError.isNotEmpty()) " Last problem: " + Sync.lastError else "")
+                )
+            }
+        }
 
         label("Categories")
         for (c in Store.categories) row(c.name, "●", c.color) { editCategory(c) }

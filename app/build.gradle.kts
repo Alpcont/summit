@@ -11,8 +11,8 @@ android {
         applicationId = "com.alp.summit"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "2.0"
+        versionCode = 5
+        versionName = "3.0"
     }
 
     // Fixed key so every new APK installs as an update over the previous one.
@@ -41,4 +41,19 @@ android {
     }
 }
 
-// No extra libraries: Android platform APIs only.
+// Sync between devices switches on once the Firebase project file is in this folder.
+// Without it the app still builds and simply has no sync.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
+// The only libraries: Firebase (sign-in and the cloud database) and Google's sign-in sheet.
+// Everything else uses Android platform APIs. Versions are pinned to ones that fit Kotlin 2.0.
+dependencies {
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("androidx.credentials:credentials:1.3.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
+}
