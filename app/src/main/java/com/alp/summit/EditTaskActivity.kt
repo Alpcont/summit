@@ -6,6 +6,7 @@ import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.os.Bundle
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -291,5 +292,14 @@ class EditTaskActivity : Activity() {
         Store.save()
         Reminders.schedule(this)
         finish()
+    }
+
+    /** Esc on a keyboard goes back to the main screen. */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_ESCAPE) {
+            if (event.action == KeyEvent.ACTION_UP) finish()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 }

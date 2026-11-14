@@ -11,9 +11,17 @@ import android.os.Build
 import android.os.Bundle
 import android.text.SpannableStringBuilder
 import android.text.style.ForegroundColorSpan
+import android.content.Context
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
+import android.view.inputmethod.InputMethodManager
+import android.widget.FrameLayout
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import android.view.inputmethod.EditorInfo
@@ -26,6 +34,8 @@ import android.widget.TextView
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.YearMonth
+import kotlin.math.abs
+import kotlin.math.min
 
 /** The main screen with its three pages: Today, Calendar and Someday. */
 class MainActivity : Activity() {
@@ -33,6 +43,11 @@ class MainActivity : Activity() {
         const val NONE = 0
         const val PAGE = 1           // the whole page glides in
         const val BELOW_HEADER = 2   // only the rows under the header glide in
+
+        // What a finger on a task line is doing.
+        const val IDLE = 0
+        const val SWIPE = 1
+        const val DRAG = 2
     }
 
     private lateinit var root: View
@@ -52,6 +67,12 @@ class MainActivity : Activity() {
     private var firstShow = true
     private var entering = false                     // true while a page is built to glide in
     private val scores = HashMap<LocalDate, TextView>()   // "2 of 5" labels in the calendar
+    private val rows = ArrayList<Row>()              // the task lines currently on screen, top to bottom
+    private var summitCarry: Float? = null           // where the ridge stood before the page was rebuilt
+    private var gestureActive = false                // a swipe or drag is in progress
+    private var settleToken = 0
+    private var undo: (() -> Unit)? = null
+    private val hideUndo = Runnable { dismissUndo() }
     private var side = -1
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -84,6 +105,15 @@ class MainActivity : Activity() {
             }
         }
 
+        findViewById<View>(R.id.undo_button).setOnClickListener {
+            val restore = undo ?: return@setOnClickListener
+            undo = null
+            restore()
+            Store.save()
+            renderMoving()
+            Reminders.schedule(this)
+            dismissUndo()
+        }
         findViewById<View>(R.id.quick_add).setOnClickListener { quickAdd() }
         findViewById<View>(R.id.quick_more).setOnClickListener { openEditor(null, input.text.toString().trim()) }
         input.setOnEditorActionListener { _, action, _ ->
@@ -114,11 +144,13 @@ class MainActivity : Activity() {
     private fun applySide() {
         val s = maxOf(side, 0)
         list.setPadding(dp(20) + s, list.paddingTop, dp(20) + s, list.paddingBottom)
-        val bar = findViewById<View>(R.id.quick_bar)
-        val lp = bar.layoutParams as ViewGroup.MarginLayoutParams
-        lp.marginStart = dp(16) + s
-        lp.marginEnd = dp(16) + s
-        bar.layoutParams = lp
+        for (id in intArrayOf(R.id.quick_bar, R.id.undo_bar)) {
+            val bar = findViewById<View>(id)
+            val lp = bar.layoutParams as ViewGroup.MarginLayoutParams
+            lp.marginStart = dp(16) + s
+            lp.marginEnd = dp(16) + s
+            bar.layoutParams = lp
+        }
         findViewById<View>(R.id.tabs).setPadding(s, 0, s, 0)
     }
 
@@ -147,6 +179,26 @@ class MainActivity : Activity() {
         firstShow = false
         Reminders.schedule(this)
         maybeReview()
+    }
+
+    /** Esc on a keyboard always leads back to the Today page. */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_ESCAPE) {
+            if (event.action == KeyEvent.ACTION_UP) {
+                input.clearFocus()
+                (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                    .hideSoftInputFromWindow(input.windowToken, 0)
+                if (tab != 0) {
+                    tab = 0
+                    render(PAGE)
+                    scroll.scrollTo(0, 0)
+                } else {
+                    scroll.smoothScrollTo(0, 0)
+                }
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     @Deprecated("Deprecated in Java")
@@ -180,8 +232,10 @@ class MainActivity : Activity() {
 
     /** Rebuilds the current page. `motion` says what should glide in: nothing, the whole page, or the part under the header. */
     private fun render(motion: Int = NONE) {
+        summitCarry = list.findViewById<SummitView>(R.id.summit)?.progress
         list.removeAllViews()
         scores.clear()
+        rows.clear()
         refreshHeader = {}
         entering = motion == PAGE
         when (tab) {
@@ -225,11 +279,13 @@ class MainActivity : Activity() {
         val summit = h.findViewById<SummitView>(R.id.summit)
         val progress = h.findViewById<TextView>(R.id.today_progress)
         val planned = h.findViewById<TextView>(R.id.today_planned)
+        val carry = summitCarry
+        if (carry != null && !entering) summit.setProgress(carry, false)
         var first = true
         refreshHeader = {
             val all = Store.on(today)
             val done = all.count { it.isDone(today) }
-            summit.setProgress(if (all.isEmpty()) 0f else done.toFloat() / all.size, !first || entering)
+            summit.setProgress(if (all.isEmpty()) 0f else done.toFloat() / all.size, !first || entering || carry != null)
             first = false
             progress.text = when {
                 all.isEmpty() -> "No tasks yet"
@@ -398,7 +454,7 @@ class MainActivity : Activity() {
         title.setTextColor(getColor(R.color.text_primary))
         list.addView(title)
         val sub = TextView(this)
-        sub.text = "Tasks without a date. Hold a task to move it into a day."
+        sub.text = "Tasks without a date. Swipe one left to do it today."
         sub.textSize = 15f
         sub.setTextColor(getColor(R.color.text_secondary))
         sub.setPadding(0, dp(2), 0, dp(18))
@@ -414,9 +470,10 @@ class MainActivity : Activity() {
             clear.setTextColor(getColor(R.color.text_secondary))
             clear.setPadding(0, dp(18), 0, dp(10))
             clear.setOnClickListener {
-                Store.tasks.removeAll { it.date == null && it.done }
-                Store.save()
-                render()
+                val gone = Store.tasks.filter { it.date == null && it.done }
+                act("Cleared " + plural(gone.size, "completed task"), { Store.tasks.addAll(gone) }) {
+                    Store.tasks.removeAll(gone.toSet())
+                }
             }
             list.addView(clear)
         }
@@ -459,14 +516,100 @@ class MainActivity : Activity() {
         return if (total > 0) "$done of $total" else ""
     }
 
+    /** One task line on screen: `view` is the outer frame with the swipe hints behind, `inner` the line itself. */
+    private class Row(
+        val view: FrameLayout, val inner: View, val task: Task, val date: LocalDate?,
+        val hintStart: TextView, val hintEnd: TextView
+    )
+
+    private fun key(t: Task, d: LocalDate?): String = t.id + "|" + (d?.toString() ?: "")
+
     private fun taskRow(t: Task, d: LocalDate?): View {
-        val row = layoutInflater.inflate(R.layout.row_task, list, false)
-        row.tag = t.id
-        bindRow(row, t, d, false)
-        return row
+        val frame = FrameLayout(this)
+        fun hint(gravity: Int): TextView {
+            val tv = TextView(this)
+            tv.textSize = 14f
+            tv.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            tv.alpha = 0f
+            tv.gravity = Gravity.CENTER_VERTICAL
+            tv.setPadding(dp(6), 0, dp(6), 0)
+            frame.addView(
+                tv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT, gravity)
+            )
+            return tv
+        }
+        val start = hint(Gravity.START)
+        val end = hint(Gravity.END)
+        val inner = layoutInflater.inflate(R.layout.row_task, frame, false)
+        frame.addView(inner)
+        val r = Row(frame, inner, t, d, start, end)
+        rows.add(r)
+        bindRow(r, false)
+        inner.setOnTouchListener(RowTouch(r))
+        return frame
     }
 
-    private fun bindRow(row: View, t: Task, d: LocalDate?, animate: Boolean) {
+    /** Tick or untick a task, with a light vibration. Ticked tasks sink to the bottom a moment later. */
+    private fun toggle(r: Row) {
+        val value = !r.task.isDone(r.date)
+        Store.setDone(r.task, r.date, value)
+        Store.save()
+        bindRow(r, true)
+        refreshHeader()
+        Reminders.schedule(this)
+        val (done, total) = Store.progress(today)
+        val dayDone = value && r.date == today && done == total
+        r.view.performHapticFeedback(
+            when {
+                dayDone -> HapticFeedbackConstants.LONG_PRESS
+                !value -> HapticFeedbackConstants.CLOCK_TICK
+                Build.VERSION.SDK_INT >= 30 -> HapticFeedbackConstants.CONFIRM
+                else -> HapticFeedbackConstants.VIRTUAL_KEY
+            }
+        )
+        if (dayDone) list.postDelayed({ celebrate() }, 500)
+        val token = ++settleToken
+        list.postDelayed({ if (token == settleToken && !gestureActive) renderMoving() }, 430)
+    }
+
+    /** The full-screen moment when every task of today is done. */
+    private fun celebrate() {
+        val (done, total) = Store.progress(today)
+        if (total == 0 || done != total || isFinishing) return
+        val content = findViewById<ViewGroup>(android.R.id.content)
+        val v = CelebrationView(this, total)
+        content.addView(v, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        v.play { content.removeView(v) }
+    }
+
+    /** Rebuilds the page and lets every line slide from where it was to where it belongs now. */
+    private fun renderMoving() {
+        val old = HashMap<String, Float>()
+        for (r in rows) old[key(r.task, r.date)] = r.view.top + r.view.translationY
+        render()
+        list.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                list.viewTreeObserver.removeOnPreDrawListener(this)
+                for (r in rows) {
+                    val was = old[key(r.task, r.date)]
+                    if (was == null) {
+                        r.view.alpha = 0f
+                        r.view.animate().alpha(1f).setDuration(240).start()
+                    } else if (was != r.view.top.toFloat()) {
+                        r.view.translationY = was - r.view.top
+                        r.view.animate().translationY(0f).setDuration(300)
+                            .setInterpolator(DecelerateInterpolator(1.6f)).start()
+                    }
+                }
+                return true
+            }
+        })
+    }
+
+    private fun bindRow(r: Row, animate: Boolean) {
+        val row = r.inner
+        val t = r.task
+        val d = r.date
         val done = t.isDone(d)
         val cat = Store.category(t.categoryId)
 
@@ -474,13 +617,7 @@ class MainActivity : Activity() {
         box.color = cat?.color ?: getColor(R.color.accent)
         box.setChecked(done, animate)
         box.contentDescription = if (done) "Done" else "Not done"
-        box.setOnClickListener {
-            Store.setDone(t, d, !t.isDone(d))
-            Store.save()
-            bindRow(row, t, d, true)
-            refreshHeader()
-            Reminders.schedule(this)
-        }
+        box.setOnClickListener { toggle(r) }
 
         // Ticking the box draws a line through the title.
         val title = row.findViewById<TitleView>(R.id.title)
@@ -489,10 +626,6 @@ class MainActivity : Activity() {
         setMeta(row, t, d, animate)
 
         row.setOnClickListener { openEditor(t, "", d) }
-        row.setOnLongClickListener {
-            rowMenu(row, t, d)
-            true
-        }
 
         // Subtasks can be ticked right in the list. They fold away once the task is done.
         val subs = row.findViewById<LinearLayout>(R.id.subs)
@@ -580,8 +713,10 @@ class MainActivity : Activity() {
         return (0 until 7).filter { mask and (1 shl it) != 0 }.joinToString(" ") { names[it] }
     }
 
-    private fun rowMenu(anchor: View, t: Task, d: LocalDate?) {
-        val m = PopupMenu(this, anchor, Gravity.END)
+    private fun rowMenu(r: Row) {
+        val t = r.task
+        val d = r.date
+        val m = PopupMenu(this, r.inner, Gravity.END)
         m.menu.add(0, 1, 0, "Edit")
         if (t.repeating && d != null) {
             m.menu.add(0, 5, 0, "Skip this day")
@@ -595,32 +730,270 @@ class MainActivity : Activity() {
         m.setOnMenuItemClickListener {
             when (it.itemId) {
                 1 -> openEditor(t, "", d)
-                2 -> collapse(anchor) { changed { Store.move(t, today) } }
-                3 -> collapse(anchor) { changed { Store.move(t, today.plusDays(1)) } }
-                4 -> collapse(anchor) { changed { Store.move(t, null) } }
-                5 -> collapse(anchor) {
-                    changed {
-                        if (d != null) t.skipDates.add(d.toString())
-                        t.updated = System.currentTimeMillis()
-                    }
-                }
+                2 -> collapse(r.view) { moveTo(t, today) }
+                3 -> collapse(r.view) { moveTo(t, today.plusDays(1)) }
+                4 -> collapse(r.view) { moveTo(t, null) }
+                5 -> collapse(r.view) { skip(t, d) }
                 6 -> AlertDialog.Builder(this)
                     .setMessage("Delete \"${t.title}\" on every day it repeats?")
-                    .setPositiveButton("Delete") { _, _ -> collapse(anchor) { changed { Store.tasks.remove(t) } } }
+                    .setPositiveButton("Delete") { _, _ -> collapse(r.view) { delete(t) } }
                     .setNegativeButton("Cancel", null)
                     .show()
-                7 -> collapse(anchor) { changed { Store.tasks.remove(t) } }
+                7 -> collapse(r.view) { delete(t) }
             }
             true
         }
         m.show()
     }
 
-    private fun changed(action: () -> Unit) {
+    // ---------- Changes that can be undone ----------
+
+    private fun moveTo(t: Task, target: LocalDate?) {
+        val date = t.date
+        val mask = t.repeatMask
+        val end = t.endDate
+        val rank = t.rank
+        val where = if (target == null) "Someday" else relDayInline(target, today)
+        act("Moved to $where", {
+            t.date = date
+            t.repeatMask = mask
+            t.endDate = end
+            t.rank = rank
+        }) { Store.move(t, target) }
+    }
+
+    private fun skip(t: Task, d: LocalDate?) {
+        if (d == null) return
+        act("Skipped for this day", { t.skipDates.remove(d.toString()) }) {
+            t.skipDates.add(d.toString())
+            t.updated = System.currentTimeMillis()
+        }
+    }
+
+    private fun delete(t: Task) {
+        val index = Store.tasks.indexOf(t)
+        act("Task deleted", { Store.tasks.add(index.coerceIn(0, Store.tasks.size), t) }) { Store.tasks.remove(t) }
+    }
+
+    /** Does `action`, then offers "Undo" for a few seconds; `restore` puts things back. */
+    private fun act(message: String, restore: () -> Unit, action: () -> Unit) {
         action()
         Store.save()
-        render()
+        renderMoving()
         Reminders.schedule(this)
+        undo = restore
+        findViewById<TextView>(R.id.undo_text).text = message
+        val bar = findViewById<View>(R.id.undo_bar)
+        settle(bar)
+        if (bar.visibility != View.VISIBLE) {
+            val lp = bar.layoutParams as ViewGroup.MarginLayoutParams
+            expand(bar, root.width - root.paddingLeft - root.paddingRight - lp.marginStart - lp.marginEnd)
+        }
+        bar.removeCallbacks(hideUndo)
+        bar.postDelayed(hideUndo, 5000)
+    }
+
+    private fun dismissUndo() {
+        undo = null
+        val bar = findViewById<View>(R.id.undo_bar)
+        bar.removeCallbacks(hideUndo)
+        collapse(bar) {}
+    }
+
+    // ---------- Swipe and drag on a task ----------
+
+    /** What a swipe to the left does with this task, in a word. */
+    private fun leftTarget(r: Row): LocalDate? {
+        val date = r.task.date ?: return today
+        return if (date.isAfter(today)) date.plusDays(1) else today.plusDays(1)
+    }
+
+    private fun leftLabel(r: Row): String = when {
+        r.task.repeating && r.date != null -> "Skip"
+        else -> relDay(leftTarget(r) ?: today, today)
+    }
+
+    private fun leftAction(r: Row) {
+        if (r.task.repeating && r.date != null) skip(r.task, r.date) else moveTo(r.task, leftTarget(r))
+    }
+
+    /**
+     * Touch handling of one task line:
+     * tap = edit, swipe right = tick, swipe left = move on,
+     * hold = menu, hold and drag = put the task somewhere else in its list.
+     */
+    private inner class RowTouch(val r: Row) : View.OnTouchListener {
+        private val slop = ViewConfiguration.get(this@MainActivity).scaledTouchSlop
+        private val threshold = dp(84).toFloat()
+        private var downX = 0f
+        private var downY = 0f
+        private var mode = IDLE
+        private var moved = false
+        private var armed = false
+        private var group: List<Row> = emptyList()
+        private var from = 0
+        private var to = 0
+        private val holding = Runnable { startDrag() }
+
+        override fun onTouch(v: View, e: MotionEvent): Boolean {
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = e.rawX
+                    downY = e.rawY
+                    mode = IDLE
+                    moved = false
+                    armed = false
+                    v.drawableHotspotChanged(e.x, e.y)
+                    v.isPressed = true
+                    v.postDelayed(holding, ViewConfiguration.getLongPressTimeout().toLong())
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = e.rawX - downX
+                    val dy = e.rawY - downY
+                    when (mode) {
+                        IDLE -> if (!moved) {
+                            if (abs(dx) > slop && abs(dx) > abs(dy) * 1.5f) {
+                                release(v)
+                                moved = true
+                                mode = SWIPE
+                                claim(v)
+                                r.hintStart.text = if (r.task.isDone(r.date)) "Not done" else "Done"
+                                r.hintEnd.text = leftLabel(r)
+                            } else if (abs(dx) > slop || abs(dy) > slop) {
+                                // A vertical move: the page scrolls and takes the touch from here.
+                                release(v)
+                                moved = true
+                            }
+                        }
+                        SWIPE -> swipeTo(dx)
+                        DRAG -> dragTo(dy)
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    val was = mode
+                    release(v)
+                    mode = IDLE
+                    when (was) {
+                        IDLE -> if (!moved) v.performClick()
+                        SWIPE -> endSwipe(e.rawX - downX)
+                        DRAG -> endDrag(true)
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    val was = mode
+                    release(v)
+                    mode = IDLE
+                    if (was == SWIPE) endSwipe(0f)
+                    if (was == DRAG) endDrag(false)
+                }
+            }
+            return true
+        }
+
+        private fun release(v: View) {
+            v.removeCallbacks(holding)
+            v.isPressed = false
+        }
+
+        /** Keeps the page from scrolling while a swipe or drag is going on. */
+        private fun claim(v: View) {
+            v.parent?.requestDisallowInterceptTouchEvent(true)
+            gestureActive = true
+        }
+
+        private fun swipeTo(dx: Float) {
+            r.inner.translationX = dx
+            val f = min(1f, abs(dx) / threshold)
+            val active = if (dx > 0) r.hintStart else r.hintEnd
+            val other = if (dx > 0) r.hintEnd else r.hintStart
+            active.alpha = f
+            other.alpha = 0f
+            active.setTextColor(getColor(if (f >= 1f) R.color.accent else R.color.text_secondary))
+            if ((f >= 1f) != armed) {
+                armed = f >= 1f
+                if (armed) r.view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            }
+        }
+
+        private fun endSwipe(dx: Float) {
+            gestureActive = false
+            r.hintStart.animate().alpha(0f).setDuration(160).start()
+            r.hintEnd.animate().alpha(0f).setDuration(160).start()
+            when {
+                dx >= threshold -> {
+                    r.inner.animate().translationX(0f).setDuration(220).setInterpolator(DecelerateInterpolator(1.6f)).start()
+                    toggle(r)
+                }
+                dx <= -threshold -> r.inner.animate().translationX(-r.inner.width.toFloat()).alpha(0f).setDuration(180)
+                    .withEndAction { collapse(r.view) { leftAction(r) } }.start()
+                else -> r.inner.animate().translationX(0f).setDuration(220).setInterpolator(DecelerateInterpolator(1.6f)).start()
+            }
+        }
+
+        /** The finger rested on the line: lift it. Open tasks can then be dragged within their list. */
+        private fun startDrag() {
+            if (mode != IDLE || moved) return
+            mode = DRAG
+            r.inner.isPressed = false
+            claim(r.inner)
+            r.view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            val can = !r.task.isDone(r.date) && (tab != 0 || filter.isEmpty())
+            group = if (can) rows.filter { it.date == r.date && !it.task.isDone(it.date) } else listOf(r)
+            from = group.indexOf(r)
+            to = from
+            r.view.background = rounded(getColor(R.color.surface2), dp(12))
+            r.view.translationZ = dp(8).toFloat()
+            r.view.animate().scaleX(1.02f).scaleY(1.02f).setDuration(120).start()
+        }
+
+        private fun dragTo(dy: Float) {
+            if (abs(dy) > slop) moved = true
+            if (group.size < 2) return
+            val lowest = (group.first().view.top - r.view.top - dp(10)).toFloat()
+            val highest = (group.last().view.bottom - r.view.bottom + dp(10)).toFloat()
+            val y = dy.coerceIn(lowest, highest)
+            r.view.translationY = y
+            val center = r.view.top + r.view.height / 2f + y
+            var index = 0
+            for (g in group) if (g !== r && g.view.top + g.view.height / 2f < center) index++
+            if (index == to) return
+            to = index
+            r.view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            // The lines in between make room.
+            val h = r.view.height.toFloat()
+            for ((i, g) in group.withIndex()) {
+                if (g === r) continue
+                val target = when {
+                    from < to && i in (from + 1)..to -> -h
+                    to < from && i in to until from -> h
+                    else -> 0f
+                }
+                g.view.animate().translationY(target).setDuration(170).start()
+            }
+        }
+
+        private fun endDrag(released: Boolean) {
+            gestureActive = false
+            r.view.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+            r.view.translationZ = 0f
+            r.view.background = null
+            if (!moved) {
+                // Held without moving: the menu.
+                r.view.translationY = 0f
+                if (released) rowMenu(r)
+                return
+            }
+            if (to == from || group.size < 2) {
+                r.view.animate().translationY(0f).setDuration(200).start()
+                return
+            }
+            val ordered = group.toMutableList()
+            ordered.removeAt(from)
+            ordered.add(to, r)
+            for ((i, g) in ordered.withIndex()) g.task.rank = i.toDouble()
+            Store.save()
+            renderMoving()
+        }
     }
 
     // ---------- Adding ----------
@@ -647,7 +1020,7 @@ class MainActivity : Activity() {
         input.setText("")
         render()
         // The new task grows into the list, and the list scrolls to it.
-        val row = list.findViewWithTag<View>(t.id) ?: return
+        val row = rows.firstOrNull { it.task === t }?.view ?: return
         expand(row, list.width - list.paddingLeft - list.paddingRight)
         scroll.post { scroll.smoothScrollTo(0, maxOf(0, row.top - dp(120))) }
     }

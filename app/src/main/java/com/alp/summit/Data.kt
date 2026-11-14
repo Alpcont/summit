@@ -33,6 +33,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
     val skipDates = HashSet<String>()  // repeating task: days removed from the series
     val subtasks = ArrayList<Subtask>()
     val subDone = HashSet<String>()    // ticked subtasks, see subKey()
+    var rank = -1.0                    // position after dragging; below 0 = automatic order
     var created = System.currentTimeMillis()
     var updated = created
 
@@ -74,7 +75,10 @@ object Store {
     val categories = ArrayList<Category>()
     private var file: File? = null
 
+    // Tasks placed by hand come first in that order; the rest follow by time, then priority.
     private val order = compareBy<Task>(
+        { if (it.rank >= 0) 0 else 1 },
+        { if (it.rank >= 0) it.rank else 0.0 },
         { if (it.time >= 0) 0 else 1 },
         { if (it.time >= 0) it.time else 0 },
         { -it.priority },
@@ -144,6 +148,7 @@ object Store {
         for (s in t.subtasks) ss.put(JSONObject().put("id", s.id).put("title", s.title))
         o.put("subtasks", ss)
         o.put("subDone", JSONArray(t.subDone.toList()))
+        o.put("rank", t.rank)
         o.put("created", t.created).put("updated", t.updated)
         return o
     }
@@ -177,6 +182,7 @@ object Store {
                 val s = ss.getJSONObject(k)
                 t.subtasks.add(Subtask(s.getString("id"), s.optString("title")))
             }
+            t.rank = j.optDouble("rank", -1.0)
             t.created = j.optLong("created", System.currentTimeMillis())
             t.updated = j.optLong("updated", t.created)
             tasks.add(t)
@@ -194,11 +200,12 @@ object Store {
 
     fun category(id: String): Category? = categories.firstOrNull { it.id == id }
 
-    /** Tasks of one day: timed ones first by time, then by priority. */
-    fun on(d: LocalDate): List<Task> = tasks.filter { it.occursOn(d) }.sortedWith(order)
+    /** Tasks of one day. Open tasks first (hand-placed, then by time and priority), ticked ones below. */
+    fun on(d: LocalDate): List<Task> =
+        tasks.filter { it.occursOn(d) }.sortedWith(compareBy<Task> { it.isDone(d) }.then(order))
 
     fun someday(): List<Task> =
-        tasks.filter { it.date == null }.sortedWith(compareBy<Task>({ -it.priority }, { it.created }))
+        tasks.filter { it.date == null }.sortedWith(compareBy<Task> { it.done }.then(order))
 
     /** (done, total) for one day. */
     fun progress(d: LocalDate): Pair<Int, Int> {
@@ -244,6 +251,7 @@ object Store {
 
     fun move(t: Task, d: LocalDate?) {
         t.date = d
+        t.rank = -1.0
         if (d == null) {
             t.repeatMask = 0
             t.endDate = null

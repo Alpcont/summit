@@ -25,6 +25,42 @@
             android:paddingBottom="24dp" />
     </ScrollView>
 
+    <!-- Appears for a few seconds after a task was deleted or moved. -->
+    <LinearLayout
+        android:id="@+id/undo_bar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp"
+        android:background="@drawable/bg_undo"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="18dp"
+        android:paddingEnd="6dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/undo_text"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/undo_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:fontFamily="sans-serif-medium"
+            android:padding="14dp"
+            android:text="@string/undo"
+            android:textColor="@color/accent"
+            android:textSize="14sp" />
+    </LinearLayout>
+
     <LinearLayout
         android:id="@+id/quick_bar"
         android:layout_width="match_parent"

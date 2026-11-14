@@ -17,9 +17,13 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
   (there is a shortcut in Summit's own settings).
 
 ## How it works
-- **Today**: the list for today, sorted by time and then priority. Type in the bar at the
-  bottom to add a task; the pencil opens the full form. Tap a task to edit it, hold it for
-  quick actions (move to tomorrow, Someday, delete).
+- **Today**: the list for today. Open tasks come first (by time, then priority), ticked ones
+  sink to the bottom. Type in the bar at the bottom to add a task; the pencil opens the full form.
+- **On a task**: tap to edit. Swipe right to tick it, swipe left to move it to tomorrow (a
+  repeating task is skipped for that day, a Someday task moves to today). Hold for the menu;
+  hold and drag to put it where you want. Tasks you placed by hand stay on top in your order.
+- **Undo**: after deleting or moving a task, an Undo bar shows for five seconds.
+- **Keyboard**: Esc always goes back to the Today page.
 - **Calendar**: switch between Month and Week. The bar under each day shows how much of it
   was completed. Tap a day to see and add its tasks; swipe sideways to change month or week.
 - **Someday**: tasks without a date.
@@ -38,5 +42,5 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
 - A "day starts at" hour, so tasks finished after midnight still count for the day before.
 - Backup to a file and restore.
 - Light theme.
-- Undo after deleting a task.
+- A "sort automatically again" button after tasks were dragged by hand.
 - Rename a subtask in place.

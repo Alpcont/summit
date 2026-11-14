@@ -372,6 +372,7 @@ class SummitView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = 
     )
     private val peakX = 0.84f
     private var shown = 0f
+    val progress: Float get() = shown
     private var anim: ValueAnimator? = null
     private var burst = 1f                       // 0..1 while the summit celebration plays
     private var burstAnim: ValueAnimator? = null
@@ -510,6 +511,131 @@ class SummitView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = 
             c.drawCircle(x, y, 9f * d, halo)
             c.drawCircle(x, y, 4.5f * d, dot)
         }
+    }
+}
+
+// ---------- The moment the whole day is done ----------
+
+/** A short full-screen celebration: a mountain is drawn, the flag goes up, sparks fly. Tap to skip. */
+class CelebrationView(ctx: Context, private val count: Int) : View(ctx) {
+    private class Spark(val dx: Float, val dy: Float, val color: Int, val size: Float)
+
+    private var t = 0f
+    private var anim: ValueAnimator? = null
+    private val accent = ctx.getColor(R.color.accent)
+    private val bg = ctx.getColor(R.color.bg)
+    private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+        color = accent
+    }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
+    private val ridge = Path()
+    private val part = Path()
+    private val flag = Path()
+    private val measure = PathMeasure()
+    private val overshoot = OvershootInterpolator(2.5f)
+    private val sparks = ArrayList<Spark>()
+
+    init {
+        val colors = intArrayOf(accent, -1, 0xFFF5C451.toInt(), 0xFF5B9DFF.toInt(), 0xFF3DDC97.toInt(), 0xFFF283B6.toInt())
+        val rnd = java.util.Random(11)
+        for (i in 0 until 46) {
+            val angle = Math.PI * (1.05 + 0.9 * rnd.nextDouble())      // upwards, fanned out
+            val speed = 0.45f + rnd.nextFloat() * 0.75f
+            sparks.add(
+                Spark(
+                    (Math.cos(angle) * speed).toFloat(), (Math.sin(angle) * speed).toFloat(),
+                    colors[i % colors.size], 2f + rnd.nextFloat() * 3f
+                )
+            )
+        }
+        setOnClickListener { anim?.end() }
+    }
+
+    fun play(end: () -> Unit) {
+        anim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 2800
+            interpolator = android.view.animation.LinearInterpolator()
+            addUpdateListener {
+                t = it.animatedValue as Float
+                invalidate()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) = end()
+            })
+            start()
+        }
+    }
+
+    override fun onDraw(c: Canvas) {
+        val d = resources.displayMetrics.density
+        val a = min(1f, t / 0.07f) * min(1f, (1f - t) / 0.14f)      // fade in, hold, fade out
+        c.drawColor(withAlpha(bg, (238 * a).toInt()))
+        val size = min(width * 0.62f, 300f * d)
+        val cx = width / 2f
+        val base = height * 0.47f
+        val peakX = cx + size * 0.08f
+        val peakY = base - size * 0.52f
+
+        // The mountain draws itself.
+        ridge.rewind()
+        ridge.moveTo(cx - size / 2, base)
+        ridge.lineTo(cx - size * 0.22f, base - size * 0.24f)
+        ridge.lineTo(cx - size * 0.12f, base - size * 0.16f)
+        ridge.lineTo(peakX, peakY)
+        ridge.lineTo(cx + size * 0.26f, base - size * 0.22f)
+        ridge.lineTo(cx + size * 0.34f, base - size * 0.30f)
+        ridge.lineTo(cx + size / 2, base)
+        measure.setPath(ridge, false)
+        part.rewind()
+        measure.getSegment(0f, measure.length * min(1f, t / 0.26f), part, true)
+        line.strokeWidth = 3f * d
+        line.alpha = (255 * a).toInt()
+        c.drawPath(part, line)
+
+        // The flag goes up.
+        val f = ((t - 0.24f) / 0.14f).coerceIn(0f, 1f)
+        if (f > 0f) {
+            val k = overshoot.getInterpolation(f)
+            val top = peakY - 30f * d * k
+            c.drawLine(peakX, peakY, peakX, top, line)
+            flag.rewind()
+            flag.moveTo(peakX, top)
+            flag.lineTo(peakX + 20f * d * k, top + 8f * d * k)
+            flag.lineTo(peakX, top + 16f * d * k)
+            flag.close()
+            fill.color = accent
+            fill.alpha = (255 * a).toInt()
+            c.drawPath(flag, fill)
+        }
+
+        // Sparks from the peak.
+        val life = ((t - 0.30f) / 0.50f).coerceIn(0f, 1f)
+        if (life > 0f && life < 1f) {
+            val reach = size * 0.9f
+            val eased = 1f - (1f - life) * (1f - life)
+            for (s in sparks) {
+                val x = peakX + s.dx * reach * eased
+                val y = peakY - 30f * d + s.dy * reach * eased + reach * 0.55f * life * life
+                fill.color = s.color
+                fill.alpha = (255 * (1f - life) * a).toInt()
+                c.drawCircle(x, y, s.size * d, fill)
+            }
+        }
+
+        val ta = ((t - 0.30f) / 0.12f).coerceIn(0f, 1f) * a
+        text.color = withAlpha(context.getColor(R.color.text_primary), (255 * ta).toInt())
+        text.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+        text.textSize = 30f * d
+        c.drawText("Summit reached", cx, base + 64f * d, text)
+        text.color = withAlpha(context.getColor(R.color.text_secondary), (255 * ta).toInt())
+        text.typeface = Typeface.DEFAULT
+        text.textSize = 15f * d
+        val line2 = if (count == 1) "Today's task is done. Well climbed, Alp." else "All $count tasks done. Well climbed, Alp."
+        c.drawText(line2, cx, base + 92f * d, text)
     }
 }
 
