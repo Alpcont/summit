@@ -18,7 +18,12 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.os.Build
+import android.text.TextPaint
+import android.text.TextUtils
 import android.util.AttributeSet
+import android.view.DragEvent
+import android.view.HapticFeedbackConstants
+import android.view.ViewConfiguration
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -717,6 +722,473 @@ class RingView(ctx: Context) : View(ctx) {
         text.typeface = Typeface.DEFAULT
         text.textSize = 14f * d
         c.drawText(sub, cx, cy + 44f * d, text)
+    }
+}
+
+// ---------- Day timeline: tasks and calendar events as blocks by the hour ----------
+
+/** A thin progress bar. */
+class BarView(ctx: Context) : View(ctx) {
+    var fraction = 0f
+    var color: Int = ctx.getColor(R.color.accent)
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val r = RectF()
+    private val track = ctx.getColor(R.color.surface2)
+
+    override fun onMeasure(widthSpec: Int, heightSpec: Int) {
+        setMeasuredDimension(MeasureSpec.getSize(widthSpec), dp(6))
+    }
+
+    override fun onDraw(c: Canvas) {
+        val h = height.toFloat()
+        paint.color = track
+        r.set(0f, 0f, width.toFloat(), h)
+        c.drawRoundRect(r, h / 2, h / 2, paint)
+        val f = fraction.coerceIn(0f, 1f)
+        if (f > 0f) {
+            paint.color = color
+            r.set(0f, 0f, max(width * f, h), h)
+            c.drawRoundRect(r, h / 2, h / 2, paint)
+        }
+    }
+}
+
+/**
+ * One day from 00:00 to 24:00. Tasks with a time are blocks as tall as their duration;
+ * events from the phone calendar are shown too but cannot be changed.
+ * Tap a block to edit, its box to tick, its round button to start or pause the timer.
+ * Hold a block and drag to move it; hold its lower edge and drag to make it longer or shorter.
+ */
+class DayTimelineView(ctx: Context) : View(ctx) {
+    private class Block(val task: Task?, val event: PhoneEvent?, val start: Int, val end: Int) {
+        var col = 0
+        var cols = 1
+        val rect = RectF()
+    }
+
+    private companion object {
+        const val MOVE = 1
+        const val RESIZE = 2
+        const val DAY = 24 * 60
+    }
+
+    var onOpen: ((Task) -> Unit)? = null
+    var onTick: ((Task) -> Unit)? = null
+    var onPlay: ((Task) -> Unit)? = null
+    var onEmpty: ((Int) -> Unit)? = null                 // minutes of the tapped free slot
+    var onChange: ((Task, Int, Int) -> Unit)? = null     // new start and duration after a drag
+    var onDropTask: ((String, Int) -> Unit)? = null      // an untimed task was dropped at these minutes
+    var onAutoScroll: ((Float) -> Int)? = null           // finger's screen y -> pixels the page scrolled
+
+    var runningId = ""        // the task the timer is on
+    var runningExtra = 0      // its minutes that are not logged yet
+    var nowMinutes = -1       // where the "now" line goes; below 0 = no line
+
+    private var day: LocalDate = LocalDate.now()
+    private var isToday = false
+    private var first = 0     // the timeline starts here (minutes); empty early hours are left out
+    private val blocks = ArrayList<Block>()
+    private val hourH = dp(60).toFloat()
+    private val gutter = dp(50).toFloat()
+    private val padTop = dp(10).toFloat()
+    private val d = resources.displayMetrics.density
+    private val slop = ViewConfiguration.get(ctx).scaledTouchSlop
+
+    private val accent = ctx.getColor(R.color.accent)
+    private val cPrimary = ctx.getColor(R.color.text_primary)
+    private val cSecondary = ctx.getColor(R.color.text_secondary)
+    private val cDim = ctx.getColor(R.color.text_dim)
+    private val cLine = ctx.getColor(R.color.surface2)
+    private val cBg = ctx.getColor(R.color.bg)
+    private val cOnAccent = ctx.getColor(R.color.on_accent)
+    private val shape = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val text = TextPaint(Paint.ANTI_ALIAS_FLAG)
+    private val path = Path()
+    private val box = RectF()
+
+    // A block being dragged.
+    private var drag: Block? = null
+    private var dragMode = 0
+    private var dragStart = 0
+    private var dragLength = 0
+    private var pressed: Block? = null
+    private var downX = 0f
+    private var downY = 0f
+    private var downRawY = 0f
+    private var lastRawY = 0f
+    private var scrolled = 0f
+    private var moved = false
+    private var dropAt = -1   // where a task dragged in from outside would land
+
+    private val hold = Runnable { startDrag() }
+    private val scroller = object : Runnable {
+        override fun run() {
+            if (drag == null) return
+            val dy = onAutoScroll?.invoke(lastRawY) ?: 0
+            if (dy != 0) {
+                scrolled += dy
+                updateDrag()
+            }
+            postDelayed(this, 16)
+        }
+    }
+
+    fun setData(day: LocalDate, isToday: Boolean, tasks: List<Task>, events: List<PhoneEvent>, nowMin: Int) {
+        this.day = day
+        this.isToday = isToday
+        blocks.clear()
+        for (e in events) if (!e.allDay) blocks.add(Block(null, e, e.start, max(e.end, e.start + 15).coerceAtMost(DAY)))
+        for (t in tasks) if (t.time >= 0) {
+            blocks.add(Block(t, null, t.time, (t.time + (if (t.duration > 0) t.duration else 30)).coerceAtMost(DAY)))
+        }
+        // Blocks that overlap share the width, side by side.
+        blocks.sortWith(compareBy({ it.start }, { -it.end }))
+        val cluster = ArrayList<Block>()
+        var clusterEnd = -1
+        fun close() {
+            val cols = (cluster.maxOfOrNull { it.col } ?: 0) + 1
+            for (b in cluster) b.cols = cols
+            cluster.clear()
+        }
+        for (b in blocks) {
+            if (cluster.isNotEmpty() && b.start >= clusterEnd) close()
+            var col = 0
+            while (cluster.any { it.col == col && it.end > b.start }) col++
+            b.col = col
+            cluster.add(b)
+            clusterEnd = max(clusterEnd, b.end)
+        }
+        close()
+        // Start at 06:00, or earlier if something is planned (or it is) before that.
+        var start = 6 * 60
+        for (b in blocks) start = min(start, b.start)
+        if (isToday) start = min(start, nowMin)
+        first = start / 60 * 60
+        place()
+        requestLayout()
+        invalidate()
+    }
+
+    private fun y(minutes: Int): Float = padTop + (minutes - first) / 60f * hourH
+
+    private fun minutesAt(y: Float): Int = (first + (y - padTop) / hourH * 60f).toInt().coerceIn(first, DAY)
+
+    private fun snap(minutes: Int, step: Int): Int = Math.round(minutes / step.toFloat()) * step
+
+    private fun place() {
+        val room = width - gutter - 4f * d
+        if (room <= 0f) return
+        for (b in blocks) {
+            val w = room / b.cols
+            val left = gutter + b.col * w
+            val top = y(b.start)
+            b.rect.set(left, top + d, left + w - 3f * d, max(y(b.end) - 1.5f * d, top + 24f * d))
+        }
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) = place()
+
+    override fun onMeasure(widthSpec: Int, heightSpec: Int) {
+        setMeasuredDimension(MeasureSpec.getSize(widthSpec), (padTop + (DAY - first) / 60f * hourH + dp(14)).toInt())
+    }
+
+    // ----- Drawing -----
+
+    override fun onDraw(c: Canvas) {
+        text.typeface = Typeface.DEFAULT
+        text.isStrikeThruText = false
+        text.textAlign = Paint.Align.RIGHT
+        text.textSize = 11f * d
+        text.color = cDim
+        shape.style = Paint.Style.FILL
+        for (h in first / 60..24) {
+            val yy = y(h * 60)
+            shape.color = cLine
+            c.drawRect(gutter, yy, width.toFloat(), yy + d, shape)
+            if (h < 24) c.drawText(String.format(java.util.Locale.ENGLISH, "%02d:00", h), gutter - 8f * d, yy + 4f * d, text)
+        }
+        text.textAlign = Paint.Align.LEFT
+        for (b in blocks) if (b !== drag) drawBlock(c, b, b.rect, false)
+
+        if (nowMinutes >= 0) {
+            val yy = y(nowMinutes)
+            shape.color = accent
+            c.drawRect(gutter - 4f * d, yy - d, width.toFloat(), yy + d, shape)
+            c.drawCircle(gutter - 4f * d, yy, 4.5f * d, shape)
+        }
+        if (dropAt >= 0) label(c, y(dropAt), fmtTime(dropAt))
+
+        val g = drag
+        if (g != null) {
+            val top = y(dragStart)
+            box.set(g.rect.left, top + d, g.rect.right, max(y(dragStart + dragLength) - 1.5f * d, top + 24f * d))
+            drawBlock(c, g, box, true)
+            label(c, if (dragMode == RESIZE) box.bottom else box.top, fmtTime(dragStart) + " – " + fmtTime((dragStart + dragLength) % DAY))
+        }
+    }
+
+    /** A line across the day with a time on it (while dragging or dropping). */
+    private fun label(c: Canvas, yy: Float, words: String) {
+        shape.style = Paint.Style.FILL
+        shape.color = accent
+        c.drawRect(gutter, yy - d, width.toFloat(), yy + d, shape)
+        text.textSize = 12f * d
+        text.typeface = Typeface.DEFAULT_BOLD
+        text.isStrikeThruText = false
+        val w = text.measureText(words) + 14f * d
+        val top = max(yy - 22f * d, 0f)
+        box.set(width - w - 6f * d, top, width - 6f * d, top + 20f * d)
+        // `box` is reused here on purpose only when no dragged block is being drawn with it.
+        c.drawRoundRect(box, 10f * d, 10f * d, shape)
+        text.color = cOnAccent
+        c.drawText(words, box.left + 7f * d, box.top + 14.5f * d, text)
+        text.typeface = Typeface.DEFAULT
+    }
+
+    private fun drawBlock(c: Canvas, b: Block, r: RectF, lifted: Boolean) {
+        val t = b.task
+        val e = b.event
+        val done = t != null && t.isDone(day)
+        val color = when {
+            t != null -> Store.category(t.categoryId)?.color ?: accent
+            e != null -> e.color
+            else -> accent
+        }
+        val radius = 9f * d
+        shape.style = Paint.Style.FILL
+        shape.color = cBg
+        c.drawRoundRect(r, radius, radius, shape)
+        shape.color = withAlpha(color, if (done) 0x1C else if (lifted) 0x66 else if (e != null) 0x2E else 0x3D)
+        c.drawRoundRect(r, radius, radius, shape)
+
+        // How far the work on this task has come, as a darker part from the left.
+        if (t != null && !done && t.duration > 0) {
+            val worked = t.worked(day) + (if (t.id == runningId) runningExtra else 0)
+            val f = (worked.toFloat() / t.duration).coerceIn(0f, 1f)
+            if (f > 0f) {
+                c.save()
+                c.clipRect(r.left, r.top, r.left + r.width() * f, r.bottom)
+                shape.color = withAlpha(color, 0x55)
+                c.drawRoundRect(r, radius, radius, shape)
+                c.restore()
+            }
+        }
+        // Coloured edge on the left.
+        c.save()
+        c.clipRect(r.left, r.top, r.left + 4f * d, r.bottom)
+        shape.color = withAlpha(color, if (done) 0x80 else 0xFF)
+        c.drawRoundRect(r, radius, radius, shape)
+        c.restore()
+        if (lifted || (t != null && t.id == runningId)) {
+            shape.style = Paint.Style.STROKE
+            shape.strokeWidth = 1.6f * d
+            shape.color = accent
+            c.drawRoundRect(r, radius, radius, shape)
+            shape.style = Paint.Style.FILL
+        }
+
+        val cy = r.top + min(r.height() / 2f, 20f * d)
+        var left = r.left + 12f * d
+        var right = r.right - 8f * d
+        if (t != null) {
+            // Tick box.
+            val s = 16f * d
+            val bx = r.left + 11f * d
+            if (done) {
+                shape.color = color
+                c.drawRoundRect(bx, cy - s / 2, bx + s, cy + s / 2, 5f * d, 5f * d, shape)
+                shape.style = Paint.Style.STROKE
+                shape.strokeWidth = 2f * d
+                shape.strokeCap = Paint.Cap.ROUND
+                shape.color = cBg
+                path.rewind()
+                path.moveTo(bx + s * 0.27f, cy + s * 0.02f)
+                path.lineTo(bx + s * 0.43f, cy + s * 0.18f)
+                path.lineTo(bx + s * 0.74f, cy - s * 0.16f)
+                c.drawPath(path, shape)
+            } else {
+                shape.style = Paint.Style.STROKE
+                shape.strokeWidth = 1.5f * d
+                shape.color = cSecondary
+                c.drawRoundRect(bx, cy - s / 2, bx + s, cy + s / 2, 5f * d, 5f * d, shape)
+            }
+            shape.style = Paint.Style.FILL
+            left = bx + s + 9f * d
+
+            // Start / pause button, for open tasks of today.
+            if (isToday && !done && r.width() > 120f * d) {
+                val px = r.right - 20f * d
+                val running = t.id == runningId
+                shape.color = if (running) accent else withAlpha(accent, 0x33)
+                c.drawCircle(px, cy, 13f * d, shape)
+                shape.color = if (running) cOnAccent else accent
+                if (running) {
+                    c.drawRect(px - 4.5f * d, cy - 5f * d, px - 1.5f * d, cy + 5f * d, shape)
+                    c.drawRect(px + 1.5f * d, cy - 5f * d, px + 4.5f * d, cy + 5f * d, shape)
+                } else {
+                    path.rewind()
+                    path.moveTo(px - 3.5f * d, cy - 5.5f * d)
+                    path.lineTo(px + 5.5f * d, cy)
+                    path.lineTo(px - 3.5f * d, cy + 5.5f * d)
+                    path.close()
+                    c.drawPath(path, shape)
+                }
+                right = px - 18f * d
+            }
+        }
+
+        val title = t?.title ?: e?.title ?: ""
+        text.textSize = 14f * d
+        text.color = if (done) cDim else if (e != null) cSecondary else cPrimary
+        text.isStrikeThruText = done
+        val room = right - left
+        if (room > 12f * d) {
+            c.drawText(TextUtils.ellipsize(title, text, room, TextUtils.TruncateAt.END).toString(), left, cy + 5f * d, text)
+        }
+        text.isStrikeThruText = false
+        if (r.height() >= 44f * d && room > 12f * d) {
+            val second = if (t != null) {
+                val parts = ArrayList<String>()
+                parts.add(fmtTime(b.start) + (if (t.duration > 0) " – " + fmtTime(b.end % DAY) else ""))
+                if (t.duration > 0 && !done) {
+                    val worked = t.worked(day) + (if (t.id == runningId) runningExtra else 0)
+                    if (worked > 0) parts.add("${worked * 100 / t.duration}%")
+                }
+                parts.joinToString("  ·  ")
+            } else {
+                fmtTime(b.start) + " – " + fmtTime(b.end % DAY) + (if (e != null && e.place.isNotBlank()) "  ·  " + e.place else "")
+            }
+            text.textSize = 12f * d
+            text.color = if (done) cDim else cSecondary
+            c.drawText(TextUtils.ellipsize(second, text, room, TextUtils.TruncateAt.END).toString(), left, cy + 23f * d, text)
+        }
+    }
+
+    // ----- Touch -----
+
+    private fun blockAt(x: Float, y: Float): Block? = blocks.lastOrNull { it.rect.contains(x, y) }
+
+    override fun onTouchEvent(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = e.x
+                downY = e.y
+                downRawY = e.rawY
+                lastRawY = e.rawY
+                scrolled = 0f
+                moved = false
+                val b = blockAt(e.x, e.y)
+                pressed = if (b?.task != null && !b.task.isDone(day)) b else null
+                if (pressed != null) postDelayed(hold, ViewConfiguration.getLongPressTimeout().toLong())
+            }
+            MotionEvent.ACTION_MOVE -> {
+                lastRawY = e.rawY
+                if (drag != null) {
+                    updateDrag()
+                } else if (!moved && (abs(e.x - downX) > slop || abs(e.y - downY) > slop)) {
+                    moved = true            // the page scrolls from here
+                    removeCallbacks(hold)
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                removeCallbacks(hold)
+                removeCallbacks(scroller)
+                val g = drag
+                if (g != null) {
+                    drag = null
+                    val t = g.task
+                    val changed = dragStart != g.start || dragLength != g.end - g.start
+                    if (t != null && changed) {
+                        // Moving keeps the duration as it was (also "none"); only a resize sets one.
+                        onChange?.invoke(t, dragStart, if (dragMode == RESIZE) dragLength else t.duration)
+                    }
+                    invalidate()
+                } else if (!moved) {
+                    performClick()
+                    click(e.x, e.y)
+                }
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                removeCallbacks(hold)
+                removeCallbacks(scroller)
+                drag = null
+                invalidate()
+            }
+        }
+        return true
+    }
+
+    override fun performClick(): Boolean {
+        super.performClick()
+        return true
+    }
+
+    private fun click(x: Float, y: Float) {
+        val b = blockAt(x, y)
+        val t = b?.task
+        if (b == null) {
+            onEmpty?.invoke((minutesAt(y) / 30 * 30).coerceAtMost(DAY - 30))
+        } else if (t != null) {
+            when {
+                x < b.rect.left + 36f * d -> onTick?.invoke(t)
+                isToday && !t.isDone(day) && b.rect.width() > 120f * d && x > b.rect.right - 40f * d -> onPlay?.invoke(t)
+                else -> onOpen?.invoke(t)
+            }
+        }
+    }
+
+    private fun startDrag() {
+        val b = pressed ?: return
+        if (moved) return
+        drag = b
+        dragMode = if (downY > b.rect.bottom - 16f * d && b.rect.height() >= 36f * d) RESIZE else MOVE
+        dragStart = b.start
+        dragLength = b.end - b.start
+        parent?.requestDisallowInterceptTouchEvent(true)
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        post(scroller)
+        invalidate()
+    }
+
+    private fun updateDrag() {
+        val b = drag ?: return
+        val delta = Math.round((lastRawY - downRawY + scrolled) / hourH * 60f)
+        val length = b.end - b.start
+        if (dragMode == MOVE) {
+            dragStart = snap(b.start + delta, 5).coerceIn(first, DAY - length)
+            dragLength = length
+        } else {
+            dragStart = b.start
+            dragLength = snap(length + delta, 5).coerceIn(5, DAY - b.start)
+        }
+        invalidate()
+    }
+
+    // ----- A task without a time is dragged in from the row above -----
+
+    override fun onDragEvent(e: DragEvent): Boolean {
+        when (e.action) {
+            DragEvent.ACTION_DRAG_STARTED -> return e.localState is String
+            DragEvent.ACTION_DRAG_LOCATION -> {
+                dropAt = snap(minutesAt(e.y), 15).coerceIn(first, DAY - 15)
+                val at = IntArray(2)
+                getLocationOnScreen(at)
+                onAutoScroll?.invoke(at[1] + e.y)
+                invalidate()
+            }
+            DragEvent.ACTION_DROP -> {
+                val id = e.localState as? String
+                val minutes = snap(minutesAt(e.y), 15).coerceIn(first, DAY - 15)
+                dropAt = -1
+                invalidate()
+                if (id != null) onDropTask?.invoke(id, minutes)
+            }
+            DragEvent.ACTION_DRAG_EXITED, DragEvent.ACTION_DRAG_ENDED -> {
+                dropAt = -1
+                invalidate()
+            }
+        }
+        return true
     }
 }
 

@@ -34,7 +34,8 @@ class Task(val id: String = UUID.randomUUID().toString()) {
     val subtasks = ArrayList<Subtask>()
     val subDone = HashSet<String>()    // ticked subtasks, see subKey()
     var rank = -1.0                    // position after dragging; below 0 = automatic order
-    var spent = 0                      // minutes of focus time logged on this task
+    var spent = 0                      // minutes of work logged on this task, all days together
+    val spentDay = HashMap<String, Int>()  // the same minutes per day (a repeating task starts fresh every day)
     var created = System.currentTimeMillis()
     var updated = created
     var syncHash = 0                   // fingerprint of the content last exchanged with the cloud; 0 = never
@@ -54,6 +55,9 @@ class Task(val id: String = UUID.randomUUID().toString()) {
     fun isDone(d: LocalDate?): Boolean =
         if (repeating && d != null) d.toString() in doneDates else done
 
+    /** Minutes worked that count towards this task's planned time on day `d`. */
+    fun worked(d: LocalDate?): Int = if (repeating && d != null) spentDay[d.toString()] ?: 0 else spent
+
     fun subKey(d: LocalDate?, s: Subtask): String =
         (if (repeating && d != null) d.toString() else "") + "|" + s.id
 
@@ -66,6 +70,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
         skipDates.clear(); skipDates.addAll(o.skipDates)
         subDone.clear(); subDone.addAll(o.subDone)
         subtasks.clear(); subtasks.addAll(o.subtasks)
+        spentDay.clear(); spentDay.putAll(o.spentDay)
     }
 
     /** A one-off copy of this task on another day (used when a missed repeat is moved). */
@@ -181,6 +186,9 @@ object Store {
         o.put("subtasks", ss)
         o.put("subDone", JSONArray(t.subDone.sorted()))
         o.put("rank", t.rank).put("spent", t.spent)
+        val sd = JSONObject()
+        for ((day, minutes) in t.spentDay.toSortedMap()) sd.put(day, minutes)
+        o.put("spentDay", sd)
         o.put("created", t.created).put("updated", t.updated)
         return o
     }
@@ -223,6 +231,7 @@ object Store {
         }
         t.rank = j.optDouble("rank", -1.0)
         t.spent = j.optInt("spent", 0)
+        j.optJSONObject("spentDay")?.let { sd -> for (day in sd.keys()) t.spentDay[day] = sd.optInt(day, 0) }
         t.created = j.optLong("created", System.currentTimeMillis())
         t.updated = j.optLong("updated", t.created)
         t.syncHash = j.optInt("syncHash", 0)
@@ -283,6 +292,31 @@ object Store {
         return out.sortedBy { it.date }
     }
 
+    // ----- The day as planned time -----
+
+    /** Open tasks of a day in the order they are worked through: by clock time, then the ones without a time. */
+    fun queue(d: LocalDate): List<Task> {
+        val open = on(d).filter { !it.isDone(d) }
+        return open.filter { it.time >= 0 }.sortedBy { it.time } + open.filter { it.time < 0 }
+    }
+
+    /**
+     * (minutes done, minutes planned) for a day, counting only tasks that have a duration.
+     * A ticked task counts in full; an open one counts the minutes worked on it, at most its
+     * duration. `running` and `extra` add the minutes of a timer that has not been logged yet.
+     */
+    fun dayTime(d: LocalDate, running: Task? = null, extra: Int = 0): Pair<Int, Int> {
+        var done = 0
+        var planned = 0
+        for (t in tasks) {
+            if (!t.occursOn(d) || t.duration <= 0) continue
+            planned += t.duration
+            done += if (t.isDone(d)) t.duration
+            else minOf(t.worked(d) + (if (t === running) extra else 0), t.duration)
+        }
+        return Pair(done, planned)
+    }
+
     // ----- Streaks and statistics -----
 
     /**
@@ -333,7 +367,10 @@ object Store {
 
     fun logFocus(t: Task?, d: LocalDate, minutes: Int) {
         if (minutes <= 0) return
-        if (t != null) t.spent += minutes
+        if (t != null) {
+            t.spent += minutes
+            t.spentDay[d.toString()] = (t.spentDay[d.toString()] ?: 0) + minutes
+        }
         focusLog[d.toString()] = (focusLog[d.toString()] ?: 0) + minutes
     }
 

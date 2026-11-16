@@ -313,6 +313,7 @@ class FocusActivity : SheetActivity() {
         super.onCreate(savedInstanceState)
         setup("Focus")
         val p = prefs(this)
+        if (p.getBoolean("focusOpen", false)) Reminders.stopFocus(this, true)   // "my day" was running: log it first
         val running = p.getLong("focusEnd", 0L) > 0L
         // A session that is already running wins over the task this screen was opened for.
         task = Store.task(if (running) p.getString("focusTask", "") else intent.getStringExtra("id"))

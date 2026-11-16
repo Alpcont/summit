@@ -27,6 +27,7 @@ class TodayWidget : AppWidgetProvider() {
             if (t != null && d != null) {
                 Store.setDone(t, d, !t.isDone(d))
                 Store.save()            // saving also redraws the widget
+                if (t.isDone(d)) Reminders.taskTicked(ctx, t, d)
                 Reminders.schedule(ctx)
             }
             return

@@ -28,6 +28,17 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
 - **Keyboard**: Esc always goes back to the Today page.
 - **Calendar**: switch between Month and Week. The bar under each day shows how much of it
   was completed. Tap a day to see and add its tasks; swipe sideways to change month or week.
+- **Day view** (Calendar → Day): the day by the hour. Tasks with a time are blocks as tall as
+  their duration; phone calendar events appear as blocks too. Tap a block to edit, its box to
+  tick. Hold a block and drag to move it, hold its lower edge and drag to change its length.
+  Tasks without a time sit in a row on top: hold one and drag it into the day. Tap an empty
+  slot to add a task there.
+- **Start my day** (round button in the Day view, today only): starts a timer on the first
+  open task. The card shows the percent of that task done and the percent of the day done
+  (minutes worked out of minutes planned; a ticked task counts in full). "Finish" ticks the
+  task and the timer moves to the next one. The button pauses in between. When a task has
+  used its planned time, you get a notification and the numbers turn red.
+- **Duration**: in the task form, pick a preset or "Custom" for any hours and minutes.
 - **Someday**: tasks without a date.
 - **Morning review**: opens once a day (from 08:00, changeable) when earlier tasks are still
   unticked. For each one choose Today, Another day or Drop.

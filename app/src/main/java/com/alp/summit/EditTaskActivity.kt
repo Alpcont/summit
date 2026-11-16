@@ -14,6 +14,7 @@ import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.LinearLayout
+import android.widget.NumberPicker
 import android.widget.TextView
 import android.widget.Toast
 import java.time.LocalDate
@@ -68,6 +69,7 @@ class EditTaskActivity : Activity() {
             notesInput.setText(t.notes)
         } else {
             date = day
+            time = intent.getIntExtra("time", -1)
             category = intent.getStringExtra("category") ?: ""
             titleInput.setText(intent.getStringExtra("title") ?: "")
             titleInput.setSelection(titleInput.text.length)
@@ -148,9 +150,18 @@ class EditTaskActivity : Activity() {
 
         val durationRow = findViewById<FlowLayout>(R.id.duration_chips)
         durationRow.removeAllViews()
-        for (m in intArrayOf(15, 30, 45, 60, 90, 120, 180)) {
+        val presets = intArrayOf(15, 30, 45, 60, 90, 120)
+        for (m in presets) {
             add(durationRow, fmtDuration(m), duration == m) { duration = if (duration == m) 0 else m }
         }
+        // Any other length: a chip that opens an hours-and-minutes picker.
+        val custom = duration > 0 && duration !in presets
+        val customChip = chip(if (custom) fmtDuration(duration) else "Custom", custom)
+        customChip.setOnClickListener { pickDuration() }
+        durationRow.addView(customChip)
+        findViewById<TextView>(R.id.label_duration).text =
+            if (time >= 0 && duration > 0) "Estimated duration  ·  ends " + fmtTime((time + duration) % (24 * 60))
+            else "Estimated duration"
 
         val priorityRow = findViewById<FlowLayout>(R.id.priority_chips)
         priorityRow.removeAllViews()
@@ -214,6 +225,44 @@ class EditTaskActivity : Activity() {
             time = h * 60 + m
             render()
         }, start / 60, start % 60, true).show()
+    }
+
+    /** How long the task takes, as hours and minutes. */
+    private fun pickDuration() {
+        val hours = NumberPicker(this)
+        hours.minValue = 0
+        hours.maxValue = 12
+        hours.value = (duration / 60).coerceAtMost(12)
+        val minutes = NumberPicker(this)
+        minutes.minValue = 0
+        minutes.maxValue = 11
+        minutes.displayedValues = Array(12) { String.format(java.util.Locale.ENGLISH, "%02d", it * 5) }
+        minutes.value = (duration % 60) / 5
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER
+        row.setPadding(0, dp(8), 0, 0)
+        fun unit(s: String): TextView {
+            val tv = TextView(this)
+            tv.text = s
+            tv.textSize = 16f
+            tv.setTextColor(getColor(R.color.text_secondary))
+            tv.setPadding(dp(8), 0, dp(20), 0)
+            return tv
+        }
+        row.addView(hours)
+        row.addView(unit("h"))
+        row.addView(minutes)
+        row.addView(unit("min"))
+        AlertDialog.Builder(this)
+            .setTitle("How long does it take?")
+            .setView(row)
+            .setPositiveButton("Set") { _, _ ->
+                duration = hours.value * 60 + minutes.value * 5
+                render()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun addSubtask() {

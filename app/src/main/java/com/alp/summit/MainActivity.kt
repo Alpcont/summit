@@ -46,6 +46,11 @@ class MainActivity : Activity() {
         const val PAGE = 1           // the whole page glides in
         const val BELOW_HEADER = 2   // only the rows under the header glide in
 
+        // Calendar page modes.
+        const val MONTH = 0
+        const val WEEK = 1
+        const val DAY = 2
+
         // What a finger on a task line is doing.
         const val IDLE = 0
         const val SWIPE = 1
@@ -62,7 +67,16 @@ class MainActivity : Activity() {
     private var today: LocalDate = LocalDate.now()
     private var selected: LocalDate = LocalDate.now()   // the day picked in the calendar
     private var month: YearMonth = YearMonth.now()      // the month the calendar shows
-    private var weekMode = false
+    private var calMode = MONTH                      // how the Calendar page shows time: month, week or one day
+    private var dayTick: (() -> Unit)? = null        // refreshes the numbers of the Day view
+    private val ticker = object : Runnable {
+        override fun run() {
+            val tick = dayTick ?: return
+            tick()
+            // Every second while a timer runs (for its clock), otherwise just often enough for the "now" line.
+            list.postDelayed(this, if (prefs(this@MainActivity).getLong("focusEnd", 0L) > 0L) 1000L else 20000L)
+        }
+    }
     private var filter = ""                          // category shown on Today, "" = all
     private var refreshHeader: () -> Unit = {}
     private var forceReview = false
@@ -89,7 +103,7 @@ class MainActivity : Activity() {
         val tabs = findViewById<View>(R.id.tabs)
         fitSystem(root, tabs)
 
-        weekMode = prefs(this).getBoolean("weekMode", false)
+        calMode = prefs(this).getInt("calMode", if (prefs(this).getBoolean("weekMode", false)) WEEK else MONTH)
         if (savedInstanceState != null) {
             tab = savedInstanceState.getInt("tab")
             savedInstanceState.getString("selected")?.let { selected = LocalDate.parse(it) }
@@ -155,6 +169,7 @@ class MainActivity : Activity() {
         Sync.start(this)
         forceReview = intent?.getBooleanExtra("review", false) == true
         openPlan = intent?.getBooleanExtra("plan", false) == true
+        if (intent?.getBooleanExtra("day", false) == true) showDay()
     }
 
     private fun applySide() {
@@ -174,6 +189,7 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra("review", false)) forceReview = true
         if (intent.getBooleanExtra("plan", false)) openPlan = true
+        if (intent.getBooleanExtra("day", false)) showDay()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -228,6 +244,15 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         Sync.onRemoteChange = null
+        list.removeCallbacks(ticker)
+    }
+
+    /** Jump to today's timeline in the Calendar (used by the timer's notification and banner). */
+    private fun showDay() {
+        tab = 1
+        calMode = DAY
+        selected = today
+        month = YearMonth.from(today)
     }
 
     @Deprecated("Deprecated in Java")
@@ -262,6 +287,8 @@ class MainActivity : Activity() {
     /** Rebuilds the current page. `motion` says what should glide in: nothing, the whole page, or the part under the header. */
     private fun render(motion: Int = NONE) {
         summitCarry = list.findViewById<SummitView>(R.id.summit)?.progress
+        list.removeCallbacks(ticker)
+        dayTick = null
         list.removeAllViews()
         scores.clear()
         rows.clear()
@@ -343,12 +370,20 @@ class MainActivity : Activity() {
 
         val p = prefs(this)
         val focusEnd = p.getLong("focusEnd", 0L)
-        if (focusEnd > System.currentTimeMillis()) {
+        if (focusEnd > System.currentTimeMillis() || (focusEnd > 0L && p.getBoolean("focusOpen", false))) {
             val focus = h.findViewById<TextView>(R.id.focus_banner)
             val until = java.time.Instant.ofEpochMilli(focusEnd).atZone(java.time.ZoneId.systemDefault()).toLocalTime()
             focus.visibility = View.VISIBLE
-            focus.text = "Focus running until " + fmtTime(until.hour * 60 + until.minute) + "  ·  Open"
-            focus.setOnClickListener { startActivity(Intent(this, FocusActivity::class.java)) }
+            if (p.getBoolean("focusOpen", false)) {
+                focus.text = "Timer running: " + (Reminders.runningTask(this)?.title ?: "task") + "  ·  Open"
+                focus.setOnClickListener {
+                    showDay()
+                    render(PAGE)
+                }
+            } else {
+                focus.text = "Focus running until " + fmtTime(until.hour * 60 + until.minute) + "  ·  Open"
+                focus.setOnClickListener { startActivity(Intent(this, FocusActivity::class.java)) }
+            }
         }
         val nowMinutes = LocalTime.now().hour * 60 + LocalTime.now().minute
         if (p.getBoolean("evening", true) && nowMinutes >= p.getInt("eveningTime", 21 * 60 + 30) &&
@@ -389,8 +424,11 @@ class MainActivity : Activity() {
         val h = layoutInflater.inflate(R.layout.header_calendar, list, false)
         list.addView(h)
         val monday = selected.minusDays((selected.dayOfWeek.value - 1).toLong())
-        h.findViewById<TextView>(R.id.cal_title).text =
-            if (weekMode) weekTitle(monday) else monthYear(month.atDay(1))
+        h.findViewById<TextView>(R.id.cal_title).text = when (calMode) {
+            WEEK -> weekTitle(monday)
+            DAY -> if (selected == today) "Today" else shortDay(selected)
+            else -> monthYear(month.atDay(1))
+        }
         h.findViewById<View>(R.id.cal_prev).setOnClickListener { shift(-1) }
         h.findViewById<View>(R.id.cal_next).setOnClickListener { shift(1) }
 
@@ -401,30 +439,31 @@ class MainActivity : Activity() {
             modes.addView(c)
             (c.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8)
         }
-        mode("Month", !weekMode) { setWeekMode(false) }
-        mode("Week", weekMode) { setWeekMode(true) }
+        mode("Month", calMode == MONTH) { setMode(MONTH) }
+        mode("Week", calMode == WEEK) { setMode(WEEK) }
+        mode("Day", calMode == DAY) { setMode(DAY) }
         val spacer = View(this)
         modes.addView(spacer, LinearLayout.LayoutParams(0, 1, 1f))
         if (selected != today || YearMonth.from(today) != month) {
             mode("Today", false) {
                 selected = today
                 month = YearMonth.from(today)
-                render(BELOW_HEADER)
+                        render(BELOW_HEADER)
                 slideIn(list.findViewById(R.id.cal_grid), 0)
             }
         }
 
         val grid = h.findViewById<MonthGridView>(R.id.cal_grid)
-        grid.weekMode = weekMode
+        grid.weekMode = calMode != MONTH
         grid.month = month
         grid.selected = selected
         grid.today = today
-        grid.onSwipe = { shift(it) }
+        grid.onSwipe = { shift(if (calMode == DAY) it * 7 else it) }
         grid.onSelect = {
-            val sameMonth = weekMode || YearMonth.from(it) == month
+            val sameMonth = calMode != MONTH || YearMonth.from(it) == month
             selected = it
             month = YearMonth.from(it)
-            render(BELOW_HEADER)
+                render(BELOW_HEADER)
             val fresh = list.findViewById<MonthGridView>(R.id.cal_grid)
             if (sameMonth) fresh?.popSelection() else slideIn(fresh, 0)
         }
@@ -433,7 +472,9 @@ class MainActivity : Activity() {
             for ((d, tv) in scores) tv.text = scoreText(d)
         }
 
-        if (!weekMode) {
+        if (calMode == DAY) {
+            renderDay()
+        } else if (calMode == MONTH) {
             list.addView(dayHeading(selected, true))
             addEvents(selected)
             val tasks = Store.on(selected)
@@ -471,25 +512,301 @@ class MainActivity : Activity() {
         else "${shortDay(monday).substringAfter(' ')} – ${shortDay(sunday).substringAfter(' ')}"
     }
 
-    private fun setWeekMode(on: Boolean) {
-        if (weekMode == on) return
-        weekMode = on
-        prefs(this).edit().putBoolean("weekMode", on).apply()
+    private fun setMode(mode: Int) {
+        if (calMode == mode) return
+        calMode = mode
+        prefs(this).edit().putInt("calMode", mode).apply()
         month = YearMonth.from(selected)
         render(BELOW_HEADER)
         slideIn(list.findViewById(R.id.cal_grid), 0)
     }
 
+    /** Arrows and swipes: one month, one week or one day (a swipe on the week strip passes 7 days). */
     private fun shift(dir: Int) {
-        if (weekMode) {
-            selected = selected.plusWeeks(dir.toLong())
-        } else {
-            val m = month.plusMonths(dir.toLong())
-            selected = if (YearMonth.from(today) == m) today else m.atDay(1)
+        when (calMode) {
+            WEEK -> selected = selected.plusWeeks(dir.toLong())
+            DAY -> selected = selected.plusDays(dir.toLong())
+            else -> {
+                val m = month.plusMonths(dir.toLong())
+                selected = if (YearMonth.from(today) == m) today else m.atDay(1)
+            }
         }
         month = YearMonth.from(selected)
         render(BELOW_HEADER)
-        slideIn(list.findViewById(R.id.cal_grid), dir)
+        slideIn(list.findViewById(R.id.cal_grid), if (dir > 0) 1 else -1)
+    }
+
+    // ---------- Day view: the day by the hour, with "Start my day" ----------
+
+    private fun renderDay() {
+        val d = selected
+        val isToday = d == today
+        val p = prefs(this)
+        val medium = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+
+        // Progress card: start button, the task the timer is on, and how far the day is.
+        val card = LinearLayout(this)
+        card.orientation = LinearLayout.VERTICAL
+        card.background = rounded(getColor(R.color.surface), dp(18))
+        card.setPadding(dp(16), dp(14), dp(16), dp(16))
+        val cardLp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        cardLp.topMargin = dp(14)
+        list.addView(card, cardLp)
+
+        val top = LinearLayout(this)
+        top.orientation = LinearLayout.HORIZONTAL
+        top.gravity = Gravity.CENTER_VERTICAL
+        card.addView(top)
+        val start = android.widget.ImageButton(this)
+        start.setBackgroundResource(R.drawable.bg_accent_round)
+        start.setColorFilter(getColor(R.color.on_accent))
+        if (isToday) {
+            val lp = LinearLayout.LayoutParams(dp(52), dp(52))
+            lp.marginEnd = dp(14)
+            top.addView(start, lp)
+        }
+        val words = LinearLayout(this)
+        words.orientation = LinearLayout.VERTICAL
+        top.addView(words, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val nowTitle = TextView(this)
+        nowTitle.textSize = 16f
+        nowTitle.typeface = medium
+        nowTitle.maxLines = 1
+        nowTitle.ellipsize = android.text.TextUtils.TruncateAt.END
+        nowTitle.setTextColor(getColor(R.color.text_primary))
+        words.addView(nowTitle)
+        val nowSub = TextView(this)
+        nowSub.textSize = 13f
+        nowSub.setPadding(0, dp(2), 0, 0)
+        words.addView(nowSub)
+        val finish = chip("Finish", true)
+        top.addView(finish)
+        (finish.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
+
+        val taskBar = BarView(this)
+        val taskBarLp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        taskBarLp.topMargin = dp(12)
+        card.addView(taskBar, taskBarLp)
+
+        val dayText = TextView(this)
+        dayText.textSize = 13f
+        dayText.setTextColor(getColor(R.color.text_secondary))
+        dayText.setPadding(0, dp(14), 0, dp(6))
+        card.addView(dayText)
+        val dayBar = BarView(this)
+        card.addView(dayBar)
+        val hint = TextView(this)
+        hint.textSize = 13f
+        hint.setTextColor(getColor(R.color.danger))
+        hint.setPadding(0, dp(10), 0, 0)
+        card.addView(hint)
+
+        // Events that last all day stay as lines; timed ones go into the timeline.
+        val events = PhoneCalendar.on(this, d)
+        addEvents(d, true)
+
+        // Tasks without a time: a row on top. Hold one and drag it into the day to give it a time.
+        val all = Store.on(d)
+        val loose = all.filter { it.time < 0 }
+        if (loose.isNotEmpty()) {
+            val label = TextView(this)
+            label.text = "No time yet  ·  hold one and drag it into the day"
+            label.textSize = 12f
+            label.setTextColor(getColor(R.color.text_dim))
+            label.setPadding(0, dp(16), 0, dp(8))
+            list.addView(label)
+            val strip = HorizontalScrollView(this)
+            strip.isHorizontalScrollBarEnabled = false
+            val row = LinearLayout(this)
+            strip.addView(row)
+            for (t in loose) {
+                val done = t.isDone(d)
+                val c = chip(t.title + (if (t.duration > 0) "  ·  " + fmtDuration(t.duration) else ""), false,
+                    Store.category(t.categoryId)?.color ?: getColor(R.color.accent))
+                c.maxWidth = dp(240)
+                c.maxLines = 1
+                c.ellipsize = android.text.TextUtils.TruncateAt.END
+                if (done) {
+                    c.paintFlags = c.paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG
+                    c.alpha = 0.5f
+                } else {
+                    c.setTextColor(getColor(R.color.text_primary))
+                    c.setOnLongClickListener { v ->
+                        v.startDragAndDrop(
+                            android.content.ClipData.newPlainText("task", t.title), View.DragShadowBuilder(v), t.id, 0
+                        )
+                        true
+                    }
+                }
+                c.setOnClickListener { openEditor(t, "", d) }
+                row.addView(c)
+                (c.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8)
+            }
+            list.addView(strip)
+        }
+
+        val timeline = DayTimelineView(this)
+        val timelineLp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        timelineLp.topMargin = dp(10)
+        list.addView(timeline, timelineLp)
+        timeline.setData(d, isToday, all, events, LocalTime.now().hour * 60 + LocalTime.now().minute)
+        timeline.onOpen = { openEditor(it, "", d) }
+        timeline.onTick = { setDone(it, d, !it.isDone(d)) }
+        timeline.onEmpty = { minutes -> openEditor(null, "", null, minutes) }
+        timeline.onChange = { t, time, duration ->
+            t.time = time
+            t.duration = duration
+            t.updated = System.currentTimeMillis()
+            Store.save()
+            Reminders.schedule(this)
+            render()
+        }
+        timeline.onDropTask = { id, minutes ->
+            Store.task(id)?.let { t ->
+                t.time = minutes
+                t.updated = System.currentTimeMillis()
+                Store.save()
+                Reminders.schedule(this)
+                render()
+            }
+        }
+        // While something is dragged near the top or bottom edge, the page scrolls along.
+        timeline.onAutoScroll = { rawY ->
+            val at = IntArray(2)
+            scroll.getLocationOnScreen(at)
+            val step = when {
+                rawY < at[1] + dp(70) -> -dp(11)
+                rawY > at[1] + scroll.height - dp(70) -> dp(11)
+                else -> 0
+            }
+            val before = scroll.scrollY
+            if (step != 0) scroll.scrollBy(0, step)
+            scroll.scrollY - before
+        }
+        timeline.onPlay = { t ->
+            if (Reminders.runningTask(this) === t) {
+                Reminders.stopFocus(this, true)
+            } else {
+                p.edit().putString("dayRun", today.toString()).apply()
+                Reminders.startRun(this, t, today)
+            }
+            render()
+        }
+        start.setOnClickListener {
+            if (p.getLong("focusEnd", 0L) > 0L) {
+                Reminders.stopFocus(this, true)              // pause: the minutes so far are kept
+            } else {
+                val next = Store.queue(today).firstOrNull() ?: return@setOnClickListener
+                p.edit().putString("dayRun", today.toString()).apply()
+                Reminders.startRun(this, next, today)
+            }
+            start.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            render()
+        }
+        finish.setOnClickListener {
+            val t = Reminders.runningTask(this) ?: return@setOnClickListener
+            val day = try {
+                LocalDate.parse(p.getString("focusDate", "") ?: "")
+            } catch (e: Exception) {
+                today
+            }
+            setDone(t, day, true)
+        }
+
+        // Numbers that move: refreshed by the ticker, every second while a timer runs.
+        dayTick = {
+            val now = LocalTime.now()
+            val nowMin = now.hour * 60 + now.minute
+            val running = Reminders.runningTask(this)
+            val extra = Reminders.runningMinutes(this)
+            val sessionStart = p.getLong("focusStart", 0L)
+            timeline.runningId = running?.id ?: ""
+            timeline.runningExtra = extra
+            timeline.nowMinutes = if (isToday) nowMin else -1
+            timeline.invalidate()
+
+            start.setImageResource(if (running != null) R.drawable.ic_pause else R.drawable.ic_play)
+            start.contentDescription = if (running != null) "Pause" else "Start my day"
+            finish.visibility = if (isToday && running != null) View.VISIBLE else View.GONE
+            taskBar.visibility = if (isToday && running != null && running.duration > 0) View.VISIBLE else View.GONE
+            nowSub.setTextColor(getColor(R.color.text_secondary))
+            if (!isToday) {
+                nowTitle.text = weekdayName(d) + " " + dayMonth(d)
+                nowSub.text = plural(all.size, "task") + "  ·  " + all.count { it.time >= 0 } + " with a time"
+            } else if (running != null) {
+                val seconds = ((System.currentTimeMillis() - sessionStart) / 1000L).coerceAtLeast(0L)
+                val clock = String.format(java.util.Locale.ENGLISH, "%d:%02d", seconds / 60, seconds % 60)
+                val worked = running.worked(today) + extra
+                nowTitle.text = "Now: " + running.title
+                if (running.duration > 0) {
+                    val left = running.duration - worked
+                    val percent = worked * 100 / running.duration
+                    taskBar.fraction = worked.toFloat() / running.duration
+                    taskBar.color = getColor(if (left < 0) R.color.danger else R.color.accent)
+                    taskBar.invalidate()
+                    if (left < 0) {
+                        nowSub.setTextColor(getColor(R.color.danger))
+                        nowSub.text = "$clock  ·  $percent%  ·  over by " + fmtDuration(-left)
+                    } else {
+                        nowSub.text = "$clock  ·  $percent% of " + fmtDuration(running.duration) + "  ·  " +
+                            (if (left == 0) "time is up" else fmtDuration(left) + " left")
+                    }
+                } else {
+                    nowSub.text = "$clock  ·  no duration set for this task"
+                }
+            } else {
+                val next = Store.queue(today).firstOrNull()
+                nowTitle.text = when {
+                    next != null -> "Next: " + next.title
+                    all.isEmpty() -> "Nothing planned today"
+                    else -> "Everything is done"
+                }
+                nowSub.text = if (next != null) "Press start. When you finish a task, the next one begins." else ""
+                start.alpha = if (next != null) 1f else 0.35f
+            }
+
+            val (doneMin, plannedMin) = Store.dayTime(d, if (isToday) running else null, if (isToday) extra else 0)
+            val without = all.count { it.duration <= 0 }
+            if (plannedMin > 0) {
+                dayText.text = "Day ${doneMin * 100 / plannedMin}%  ·  " + (if (doneMin > 0) fmtDuration(doneMin) else "0m") +
+                    " of " + fmtDuration(plannedMin) + " planned" +
+                    (if (without > 0) "  ·  " + plural(without, "task") + " without a duration" else "")
+                dayBar.fraction = doneMin.toFloat() / plannedMin
+            } else {
+                dayText.text = "Give your tasks a duration to see how far the day is."
+                dayBar.fraction = 0f
+            }
+            dayBar.invalidate()
+
+            // Running late: open tasks whose planned slot is already over.
+            val late = if (isToday) all.count {
+                !it.isDone(d) && it.time >= 0 && it !== running && it.time + maxOf(it.duration, 0) < nowMin
+            } else 0
+            hint.visibility = if (late > 0) View.VISIBLE else View.GONE
+            hint.text = if (late == 1) "1 task is behind schedule." else "$late tasks are behind schedule."
+        }
+        dayTick?.invoke()
+        list.postDelayed(ticker, 1000L)
+    }
+
+    /** Tick or untick from the Day view (also the "Finish" button of the running task). */
+    private fun setDone(t: Task, d: LocalDate, value: Boolean) {
+        Store.setDone(t, d, value)
+        Store.save()
+        if (value) Reminders.taskTicked(this, t, d)   // logs the timer and moves on to the next task
+        Reminders.schedule(this)
+        val (done, total) = Store.progress(today)
+        val dayDone = value && d == today && done == total
+        list.performHapticFeedback(
+            when {
+                dayDone -> HapticFeedbackConstants.LONG_PRESS
+                !value -> HapticFeedbackConstants.CLOCK_TICK
+                Build.VERSION.SDK_INT >= 30 -> HapticFeedbackConstants.CONFIRM
+                else -> HapticFeedbackConstants.VIRTUAL_KEY
+            }
+        )
+        if (dayDone) list.postDelayed({ celebrate() }, 400)
+        render()
     }
 
     /** The calendar grid slides in from the side it was moved towards. */
@@ -546,8 +863,8 @@ class MainActivity : Activity() {
     }
 
     /** Lines for the phone calendar's events of a day (if switched on in Settings). Returns how many. */
-    private fun addEvents(d: LocalDate): Int {
-        val events = PhoneCalendar.on(this, d)
+    private fun addEvents(d: LocalDate, allDayOnly: Boolean = false): Int {
+        val events = PhoneCalendar.on(this, d).filter { !allDayOnly || it.allDay }
         for (e in events) {
             val row = LinearLayout(this)
             row.orientation = LinearLayout.HORIZONTAL
@@ -642,6 +959,7 @@ class MainActivity : Activity() {
         val value = !r.task.isDone(r.date)
         Store.setDone(r.task, r.date, value)
         Store.save()
+        if (value) Reminders.taskTicked(this, r.task, r.date)   // logs a running timer, moves "my day" on
         bindRow(r, true)
         refreshHeader()
         Reminders.schedule(this)
@@ -1129,13 +1447,14 @@ class MainActivity : Activity() {
         scroll.post { scroll.smoothScrollTo(0, maxOf(0, row.top - dp(120))) }
     }
 
-    private fun openEditor(t: Task?, title: String, d: LocalDate? = null) {
+    private fun openEditor(t: Task?, title: String, d: LocalDate? = null, time: Int = -1) {
         val i = Intent(this, EditTaskActivity::class.java)
         if (t != null) {
             i.putExtra("id", t.id)
             if (d != null) i.putExtra("date", d.toString())
         } else {
             i.putExtra("title", title)
+            if (time >= 0) i.putExtra("time", time)
             targetDate()?.let { i.putExtra("date", it.toString()) }
             if (tab == 0) i.putExtra("category", filter)
             input.setText("")
