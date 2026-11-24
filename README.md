@@ -70,8 +70,8 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
 ## Plan
 1. **Done**: tasks, calendar, morning review, reminders, categories.
 2. **Done**: home-screen widget, streaks and stats, focus timer, smart quick-add, evening planning.
-3. **Done**: phone calendar events next to tasks; sync between phone and tablet (active once
-   the Firebase file is added).
+3. **Done**: phone calendar events next to tasks; sync between phone and tablet (switched on
+   in 3.2 with the Firebase file in the repo).
 
 ## Ideas for later
 - A "day starts at" hour, so tasks finished after midnight still count for the day before.
