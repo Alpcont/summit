@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "1027978616356",
+    "project_id": "summit-60309",
+    "storage_bucket": "summit-60309.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1027978616356:android:3ad100768e318ec49842b1",
+        "android_client_info": {
+          "package_name": "com.alp.summit"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1027978616356-el6vjrqnhkut6bm8vvvpekdf80hbp784.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.alp.summit",
+            "certificate_hash": "a49dcb7f3e392dd52a0ed52018b1aba4868ef282"
+          }
+        },
+        {
+          "client_id": "1027978616356-fjpbflc6okh0brog671d8js3qkqlnkgs.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDKv-8ccmwHvSbJjDU0riqCvfj8397HS8Q"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1027978616356-fjpbflc6okh0brog671d8js3qkqlnkgs.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
