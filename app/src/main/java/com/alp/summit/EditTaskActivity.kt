@@ -1,6 +1,7 @@
 package com.alp.summit
 
 import android.app.Activity
+import android.content.Context
 import android.app.AlertDialog
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
@@ -23,6 +24,10 @@ import java.util.UUID
 
 /** Create a task or change one. Nothing is stored until Save is tapped. */
 class EditTaskActivity : Activity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(Look.wrap(newBase))
+    }
+
     private var task: Task? = null
     private var occurrence: LocalDate? = null   // the day the task was opened from
     private val today: LocalDate = LocalDate.now()
@@ -172,7 +177,7 @@ class EditTaskActivity : Activity() {
         val categoryRow = findViewById<FlowLayout>(R.id.category_chips)
         categoryRow.removeAllViews()
         for (c in Store.categories) {
-            add(categoryRow, c.name, category == c.id, c.color) { category = if (category == c.id) "" else c.id }
+            add(categoryRow, c.name, category == c.id, Look.tone(c.color)) { category = if (category == c.id) "" else c.id }
         }
 
         val subList = findViewById<LinearLayout>(R.id.sub_list)

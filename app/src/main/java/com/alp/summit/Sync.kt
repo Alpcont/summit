@@ -27,7 +27,8 @@ import java.util.concurrent.Executor
  * Sync between phone and tablet through Firebase (the only file that talks to Firebase).
  *
  * The app keeps working from its own file on the device. This layer only copies changes:
- * - before every save, tasks whose content changed are sent up (users/<account>/tasks/<task id>);
+ * - before every save, tasks whose content changed are sent up (users/<account>/tasks/<task id>),
+ *   and the same for habits, notes, courses and assignments (users/<account>/<kind>/<id>);
  * - changes made on another device arrive through listeners and are merged in (see Store.applyRemote…).
  * If both devices changed the same task, the later change wins. Without a google-services.json
  * in the project, or when nobody is signed in, everything here quietly does nothing.
@@ -118,6 +119,20 @@ object Sync {
             if (Store.applyRemoteFocus(JSONObject(data as Map<*, *>))) arrived(app)
         })
 
+        // Habits, notes, courses and assignments: one collection each, merged like tasks.
+        for (shelf in Store.shelves) {
+            listeners.add(user.collection(shelf.name).addSnapshotListener { snap, e ->
+                if (e != null || snap == null) return@addSnapshotListener
+                var changed = false
+                for (c in snap.documentChanges) {
+                    val doc = c.document
+                    if (doc.metadata.hasPendingWrites()) continue
+                    if (shelf.applyRemote(doc.id, JSONObject(doc.data as Map<*, *>))) changed = true
+                }
+                if (changed) arrived(app)
+            })
+        }
+
         Store.save()   // sends whatever this device has that the cloud does not know yet
     }
 
@@ -166,6 +181,13 @@ object Sync {
                 val items = ArrayList<Map<String, Any>>()
                 for (c in Store.categories) items.add(mapOf("id" to c.id, "name" to c.name, "color" to c.color))
                 user.collection("meta").document("categories").set(mapOf("items" to items, "updated" to now))
+            }
+
+            for (shelf in Store.shelves) {
+                val (up, gone) = shelf.outgoing(now)
+                val col = user.collection(shelf.name)
+                for (j in up) col.document(j.getString("id")).set(toMap(j))
+                for (id in gone) col.document(id).set(mapOf("deleted" to true, "updated" to now))
             }
 
             val focusHash = Store.focusHash()

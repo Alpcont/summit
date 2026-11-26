@@ -1,6 +1,7 @@
 package com.alp.summit
 
 import android.app.Activity
+import android.content.Context
 import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
@@ -20,6 +21,10 @@ import java.util.Locale
 
 /** Shared frame of the smaller screens: top bar, scrolling body, optional button, Esc to close. */
 abstract class SheetActivity : Activity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(Look.wrap(newBase))
+    }
+
     protected lateinit var body: LinearLayout
     protected lateinit var action: TextView
 
@@ -126,7 +131,7 @@ class StatsActivity : SheetActivity() {
             val name = TextView(this)
             name.text = c.name
             name.textSize = 15f
-            name.setTextColor(c.color)
+            name.setTextColor(Look.tone(c.color))
             row.addView(name, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             val score = TextView(this)
             score.text = "$done of $total"
@@ -144,7 +149,10 @@ class StatsActivity : SheetActivity() {
 
 // ---------- Evening planning ----------
 
-/** A calm look at tomorrow: add tasks, carry over what is still open, pull something from Someday. */
+/**
+ * A calm look at tomorrow: add tasks, carry over what is still open, pull something from Someday,
+ * review today's classes. On Sundays it starts with a look back at the week.
+ */
 class PlanActivity : SheetActivity() {
     private val today: LocalDate = LocalDate.now()
     private val tomorrow: LocalDate = today.plusDays(1)
@@ -153,8 +161,10 @@ class PlanActivity : SheetActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setup("Plan tomorrow")
+        val sunday = today.dayOfWeek == java.time.DayOfWeek.SUNDAY
+        setup(if (sunday) "Weekly review" else "Plan tomorrow")
         prefs(this).edit().putString("planShown", today.toString()).apply()
+        if (sunday) weekReview()
 
         val (done, total) = Store.progress(today)
         text(
@@ -232,12 +242,104 @@ class PlanActivity : SheetActivity() {
         render()
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::lists.isInitialized) render()   // a note may have been changed in between
+    }
+
+    /** Sunday: what got done, what kept being moved, the task streak and the habit chains. */
+    private fun weekReview() {
+        val monday = today.minusDays((today.dayOfWeek.value - 1).toLong())
+        text(body, "Your week", 28f, R.color.text_primary, 4).typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+        text(body, shortDay(monday) + " – " + shortDay(today), 15f, R.color.text_secondary, 2)
+
+        label(body, "What got done")
+        var done = 0
+        var total = 0
+        val doneTitles = ArrayList<String>()
+        for (i in 0 until 7) {
+            val d = monday.plusDays(i.toLong())
+            for (t in Store.tasks) if (t.occursOn(d)) {
+                total++
+                if (t.isDone(d)) {
+                    done++
+                    if (!t.repeating) doneTitles.add(t.title)
+                }
+            }
+        }
+        text(body, if (total == 0) "No tasks this week." else "$done of $total tasks done  ·  ${done * 100 / total}%", 16f, R.color.text_primary)
+        val focus = Store.focusMinutes(today, 7)
+        if (focus > 0) text(body, fmtDuration(focus) + " of focus time", 14f, R.color.text_secondary, 2)
+        if (doneTitles.isNotEmpty()) {
+            text(body, doneTitles.take(10).joinToString("\n") { "✓  $it" } +
+                (if (doneTitles.size > 10) "\n…and ${doneTitles.size - 10} more" else ""), 14f, R.color.text_secondary, 8)
+                .setLineSpacing(dp(3).toFloat(), 1f)
+        }
+
+        val moved = Store.tasks.filter { it.moves >= 2 && !it.done && !it.repeating }.sortedByDescending { it.moves }
+        if (moved.isNotEmpty()) {
+            label(body, "Kept being moved")
+            text(body, "Worth a decision: do it, give it a fixed time, split it, or drop it.", 13f, R.color.text_dim)
+            for (t in moved.take(6)) text(body, t.title + "  ·  moved ${t.moves} times", 15f, R.color.text_primary, 6)
+        }
+
+        label(body, "Streaks")
+        val streak = Store.streak(today)
+        text(body, "Summit streak: " + plural(streak, "day") + "  ·  best " + plural(Store.bestStreak(today), "day"), 15f, R.color.text_primary)
+        for (h in Store.habits.items.sortedByDescending { it.streak(today) }) {
+            val n = h.streak(today)
+            val tv = text(body, h.title + "  ·  " + plural(n, "day") + " chain", 15f, R.color.text_primary, 6)
+            if (n > 0) tv.setTextColor(chainHeat(n))
+        }
+        if (Store.habits.items.isEmpty()) text(body, "No habits yet. Add some on the Chains tab.", 14f, R.color.text_dim, 4)
+
+        label(body, "Now: plan Monday")
+    }
+
     private fun render() {
         lists.removeAllViews()
         label(lists, "Tomorrow")
         val planned = Store.on(tomorrow)
         if (planned.isEmpty()) text(lists, "Nothing planned yet.", 15f, R.color.text_dim)
         for (t in planned) line(t, null) {}
+
+        // Notes pinned to tomorrow.
+        val pinned = Store.notes.items.filter { !it.developer && it.pin == tomorrow }
+        if (pinned.isNotEmpty()) {
+            label(lists, "Notes for tomorrow")
+            for (n in pinned) lists.addView(noteCard(n, today, false))
+        }
+
+        // One "review notes" task for each class held today.
+        val reviews = Courses.reviews(this, today)
+        if (reviews.isNotEmpty()) {
+            label(lists, "Today's classes")
+            for (sg in reviews) {
+                val row = LinearLayout(this)
+                row.orientation = LinearLayout.HORIZONTAL
+                row.gravity = Gravity.CENTER_VERTICAL
+                row.setPadding(0, dp(7), 0, dp(7))
+                val words = LinearLayout(this)
+                words.orientation = LinearLayout.VERTICAL
+                text(words, sg.title, 16f, R.color.text_primary)
+                text(words, sg.why + "  ·  " + fmtDuration(sg.duration), 13f, R.color.text_secondary, 1)
+                row.addView(words, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                val add = chip("Add", true, Look.tone(sg.course.color))
+                add.setOnClickListener {
+                    Courses.accept(this, sg)
+                    render()
+                }
+                row.addView(add)
+                val skip = chip("Skip", false)
+                skip.setOnClickListener {
+                    Courses.skip(sg)
+                    render()
+                }
+                row.addView(skip)
+                (skip.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
+                lists.addView(row)
+            }
+        }
 
         val open = Store.on(today).filter { !it.isDone(today) && !it.repeating }
         if (open.isNotEmpty()) {

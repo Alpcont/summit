@@ -5,7 +5,7 @@
     android:layout_height="match_parent"
     android:orientation="vertical">
 
-    <!-- The current page (Today, Calendar or Someday) is built into @id/list. -->
+    <!-- The current page (Today, Calendar, Chains, Notes or Someday) is built into @id/list. -->
     <ScrollView
         android:id="@+id/scroll"
         android:layout_width="match_parent"
@@ -156,6 +156,32 @@
             android:gravity="center_horizontal"
             android:paddingTop="8dp"
             android:text="@string/tab_calendar"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/tab_chains"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:drawableTop="@drawable/ic_chain"
+            android:drawablePadding="2dp"
+            android:gravity="center_horizontal"
+            android:paddingTop="8dp"
+            android:text="@string/tab_chains"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/tab_notes"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:drawableTop="@drawable/ic_notes"
+            android:drawablePadding="2dp"
+            android:gravity="center_horizontal"
+            android:paddingTop="8dp"
+            android:text="@string/tab_notes"
             android:textSize="11sp" />
 
         <TextView

@@ -38,6 +38,54 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
+// ---------- Light or dark ----------
+
+/**
+ * The theme is chosen in Settings on each device (dark is the default) and is not synced:
+ * "dark", "grey" (a softer charcoal shade of dark) or "light".
+ * Every screen passes its context through `wrap`, which picks the colours and styles:
+ * values/ = light, values-night/ = dark, values-desk-night/ = grey. Grey borrows the "desk" screen
+ * type only to reach its own colour file; the other themes set the normal type, so a Samsung DeX
+ * screen does not turn dark into grey. Widgets cannot be wrapped, so they ask `theme` and colour themselves.
+ */
+object Look {
+    var light = false
+        private set
+    var current = "dark"
+        private set
+
+    fun theme(ctx: Context): String = when (prefs(ctx).getString("theme", "dark")) {
+        "light" -> "light"
+        "grey" -> "grey"
+        else -> "dark"
+    }
+
+    fun isLight(ctx: Context): Boolean = theme(ctx) == "light"
+
+    fun wrap(base: Context): Context {
+        current = theme(base)
+        light = current == "light"
+        val c = android.content.res.Configuration()
+        c.uiMode = when (current) {
+            "light" -> android.content.res.Configuration.UI_MODE_TYPE_NORMAL or android.content.res.Configuration.UI_MODE_NIGHT_NO
+            "grey" -> android.content.res.Configuration.UI_MODE_TYPE_DESK or android.content.res.Configuration.UI_MODE_NIGHT_YES
+            else -> android.content.res.Configuration.UI_MODE_TYPE_NORMAL or android.content.res.Configuration.UI_MODE_NIGHT_YES
+        }
+        return base.createConfigurationContext(c)
+    }
+
+    /** Category and course colours: a little deeper on the light background so text stays readable. */
+    fun tone(color: Int): Int = if (!light) color else deeper(color)
+
+    fun deeper(color: Int): Int {
+        val hsv = FloatArray(3)
+        android.graphics.Color.colorToHSV(color, hsv)
+        hsv[1] = min(1f, hsv[1] * 1.12f)
+        hsv[2] = hsv[2] * 0.74f
+        return android.graphics.Color.HSVToColor(android.graphics.Color.alpha(color), hsv)
+    }
+}
+
 // ---------- Small UI helpers ----------
 
 fun Context.dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
@@ -545,7 +593,9 @@ class CelebrationView(ctx: Context, private val count: Int) : View(ctx) {
     private val sparks = ArrayList<Spark>()
 
     init {
-        val colors = intArrayOf(accent, -1, 0xFFF5C451.toInt(), 0xFF5B9DFF.toInt(), 0xFF3DDC97.toInt(), 0xFFF283B6.toInt())
+        val colors = intArrayOf(
+            accent, ctx.getColor(R.color.text_primary), 0xFFF5C451.toInt(), 0xFF5B9DFF.toInt(), 0xFF3DDC97.toInt(), 0xFFF283B6.toInt()
+        )
         val rnd = java.util.Random(11)
         for (i in 0 until 46) {
             val angle = Math.PI * (1.05 + 0.9 * rnd.nextDouble())      // upwards, fanned out
@@ -950,8 +1000,8 @@ class DayTimelineView(ctx: Context) : View(ctx) {
         val e = b.event
         val done = t != null && t.isDone(day)
         val color = when {
-            t != null -> Store.category(t.categoryId)?.color ?: accent
-            e != null -> e.color
+            t != null -> Store.colorOf(t) ?: accent
+            e != null -> Look.tone(e.color)
             else -> accent
         }
         val radius = 9f * d

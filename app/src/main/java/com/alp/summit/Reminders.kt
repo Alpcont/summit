@@ -18,7 +18,7 @@ import java.time.ZoneId
 
 /**
  * Reminders without any background service: one alarm is always set for the next thing
- * that needs a notification (a timed task or the morning nudge). When it fires we show
+ * that needs a notification (a timed task, a nudge or the habit reminder). When it fires we show
  * what is due and set the alarm for the next one.
  */
 object Reminders {
@@ -30,6 +30,7 @@ object Reminders {
     private const val TASK = 0
     private const val MORNING = 1
     private const val EVENING = 2
+    private const val HABITS = 3
     private const val STALE = 3 * 60 * 60_000L   // do not show reminders more than 3 hours late
 
     private class Event(val at: Long, val task: Task?, val date: LocalDate, val kind: Int)
@@ -52,6 +53,10 @@ object Reminders {
             if (p.getBoolean("evening", true)) {
                 val a = millis(d, p.getInt("eveningTime", 21 * 60 + 30))
                 if (a > from && a <= to) out.add(Event(a, null, d, EVENING))
+            }
+            if (p.getBoolean("habitRemind", true) && Store.habits.items.isNotEmpty()) {
+                val a = millis(d, p.getInt("habitTime", 21 * 60))
+                if (a > from && a <= to) out.add(Event(a, null, d, HABITS))
             }
             for (t in Store.tasks) {
                 if (t.time < 0 || t.remind < 0 || !t.occursOn(d) || t.isDone(d)) continue
@@ -224,7 +229,7 @@ object Reminders {
             NotificationChannel(CH_TASK, "Task reminders", NotificationManager.IMPORTANCE_HIGH)
         )
         nm.createNotificationChannel(
-            NotificationChannel(CH_DAILY, "Morning and evening nudges", NotificationManager.IMPORTANCE_DEFAULT)
+            NotificationChannel(CH_DAILY, "Morning, evening and habit nudges", NotificationManager.IMPORTANCE_DEFAULT)
         )
     }
 
@@ -253,14 +258,32 @@ object Reminders {
         val open = Intent(ctx, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val t = e.task
+        if (e.kind == HABITS) {
+            // Only if a habit planned for today is still unticked.
+            val left = Store.habits.items.filter { it.planned(e.date) && !it.ticked(e.date) }
+            if (left.isEmpty()) return
+            open.putExtra("chains", true)
+            val n = Notification.Builder(ctx, CH_DAILY)
+                .setSmallIcon(R.drawable.ic_stat)
+                .setContentTitle(if (left.size == 1) "Keep your chain going" else "Keep your chains going")
+                .setContentText("Not ticked yet today: " + left.joinToString(", ") { it.title })
+                .setColor(ctx.getColor(R.color.accent))
+                .setContentIntent(PendingIntent.getActivity(ctx, 5, open, flags))
+                .setAutoCancel(true)
+                .build()
+            nm.notify(5, n)
+            return
+        }
         if (e.kind == EVENING) {
             val (done, total) = Store.progress(LocalDate.now())
+            val sunday = e.date.dayOfWeek == java.time.DayOfWeek.SUNDAY
             open.putExtra("plan", true)
             val n = Notification.Builder(ctx, CH_DAILY)
                 .setSmallIcon(R.drawable.ic_stat)
-                .setContentTitle("Plan tomorrow")
+                .setContentTitle(if (sunday) "Weekly review" else "Plan tomorrow")
                 .setContentText(
-                    (if (total > 0) "$done of $total done today. " else "") + "Take a minute to set up tomorrow."
+                    if (sunday) "Look back at your week, then set up Monday."
+                    else (if (total > 0) "$done of $total done today. " else "") + "Take a minute to set up tomorrow."
                 )
                 .setColor(ctx.getColor(R.color.accent))
                 .setContentIntent(PendingIntent.getActivity(ctx, 4, open, flags))

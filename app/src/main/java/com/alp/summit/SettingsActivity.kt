@@ -2,6 +2,7 @@ package com.alp.summit
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.app.AlertDialog
 import android.app.TimePickerDialog
 import android.content.Intent
@@ -24,6 +25,10 @@ import java.util.UUID
 
 /** Morning nudge, categories and reminder help. */
 class SettingsActivity : Activity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(Look.wrap(newBase))
+    }
+
     private lateinit var body: LinearLayout
     private val palette = listOf(
         "#5B9DFF", "#3DDC97", "#B692F6", "#38C6D9", "#F5C451",
@@ -50,6 +55,20 @@ class SettingsActivity : Activity() {
     private fun render() {
         body.removeAllViews()
         val p = prefs(this)
+
+        label("Appearance")
+        val theme = Look.theme(this)
+        row("Theme", theme.replaceFirstChar { it.uppercase() }, getColor(R.color.accent)) {
+            val next = when (theme) {
+                "dark" -> "grey"
+                "grey" -> "light"
+                else -> "dark"
+            }
+            p.edit().putString("theme", next).apply()
+            TodayWidget.refresh(this)    // the widgets follow the theme too
+            recreate()
+        }
+        note("Chosen on each device. Tap to switch: Dark → Grey → Light.")
 
         label("Morning")
         val nudge = p.getBoolean("nudge", true)
@@ -86,6 +105,23 @@ class SettingsActivity : Activity() {
         row("Plan tomorrow now", "›", 0) { startActivity(Intent(this, PlanActivity::class.java)) }
         note("A notification in the evening that opens a short screen to set up tomorrow.")
 
+        label("Chains")
+        val habitRemind = p.getBoolean("habitRemind", true)
+        row("Habit reminder", if (habitRemind) "On" else "Off", if (habitRemind) getColor(R.color.accent) else 0) {
+            p.edit().putBoolean("habitRemind", !habitRemind).apply()
+            Reminders.schedule(this)
+            render()
+        }
+        val habitMinutes = p.getInt("habitTime", 21 * 60)
+        row("Time", fmtTime(habitMinutes), 0) {
+            TimePickerDialog(this, R.style.AppDialog, { _, h, m ->
+                p.edit().putInt("habitTime", h * 60 + m).apply()
+                Reminders.schedule(this)
+                render()
+            }, habitMinutes / 60, habitMinutes % 60, true).show()
+        }
+        note("A notification at this time if a habit planned for today is not ticked yet.")
+
         label("Phone calendar")
         val events = PhoneCalendar.enabled(this)
         row("Show calendar events", if (events) "On" else "Off", if (events) getColor(R.color.accent) else 0) {
@@ -96,7 +132,7 @@ class SettingsActivity : Activity() {
                 render()
             }
         }
-        note("Classes and appointments from the phone's calendar appear above your tasks. Summit only reads them.")
+        note("Classes and appointments from the phone's calendar appear above your tasks. Summit only reads them. Courses (cap icon on Today) are found here too.")
 
         label("Sync")
         if (!Sync.configured(this)) {
@@ -118,14 +154,15 @@ class SettingsActivity : Activity() {
                     render()
                 }
                 note(
-                    "Tasks, categories and focus time are kept the same on every device signed in with this account." +
+                    "Tasks, categories, focus time, habits, notes, courses and assignments are kept the same on every device " +
+                        "signed in with this account. Theme and reminder times stay per device." +
                         (if (Sync.lastError.isNotEmpty()) " Last problem: " + Sync.lastError else "")
                 )
             }
         }
 
         label("Categories")
-        for (c in Store.categories) row(c.name, "●", c.color) { editCategory(c) }
+        for (c in Store.categories) row(c.name, "●", Look.tone(c.color)) { editCategory(c) }
         row("Add a category", "+", getColor(R.color.accent)) { editCategory(null) }
 
         label("Reminders")
