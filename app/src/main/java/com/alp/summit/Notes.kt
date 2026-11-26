@@ -17,6 +17,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
+import android.widget.ImageView
+import android.widget.HorizontalScrollView
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -121,50 +124,101 @@ fun claudePrompt(ctx: Context): Pair<String, Int> {
 
 class NotesPage(private val a: Activity, private val rerender: () -> Unit) {
     private var query = ""
+    private var fab: View? = null
+    private val light get() = Look.light
+    private fun c(id: Int) = a.getColor(id)
+    private fun dp(v: Int) = a.dp(v)
+
+    /** A raised white card on the light theme, the next surface up on the dark ones. */
+    private fun raised(): Int = if (light) 0xFFFFFFFF.toInt() else c(R.color.surface)
+
+    /** The round "+" in the corner, only while the Notes tab is showing. */
+    fun showFab(show: Boolean) {
+        val content = a.findViewById<ViewGroup>(android.R.id.content) ?: return
+        val existing = fab
+        if (!show) {
+            if (existing != null) content.removeView(existing)
+            fab = null
+            return
+        }
+        if (existing != null) return
+        val b = ImageView(a)
+        b.setImageResource(R.drawable.ic_add)
+        b.setColorFilter(c(R.color.on_accent))
+        b.scaleType = ImageView.ScaleType.CENTER
+        b.background = rippled(rounded(c(R.color.accent), dp(18)), c(R.color.on_accent))
+        b.elevation = dp(6).toFloat()
+        b.contentDescription = "New note"
+        b.setOnClickListener { a.openNote(null, prefs(a).getBoolean("notesDeveloper", false)) }
+        val lp = FrameLayout.LayoutParams(dp(56), dp(56), Gravity.BOTTOM or Gravity.END)
+        lp.marginEnd = dp(20)
+        // Above the tab bar and the system navigation bar.
+        val bottomInset = a.findViewById<View>(R.id.root)?.paddingBottom ?: 0
+        lp.bottomMargin = dp(58) + bottomInset + dp(18)
+        content.addView(b, lp)
+        fab = b
+    }
 
     fun build(list: LinearLayout) {
         val p = prefs(a)
         val developer = p.getBoolean("notesDeveloper", false)
         val today = LocalDate.now()
 
-        val title = TextView(a)
-        title.text = "Notes"
-        title.textSize = 36f
-        title.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
-        title.setTextColor(a.getColor(R.color.text_primary))
+        val title = a.mtext("Notes", 28f, 700, c(R.color.text_primary))
+        title.letterSpacing = -0.02f
         list.addView(title)
 
-        // The switch at the top.
-        val modes = LinearLayout(a)
-        modes.orientation = LinearLayout.HORIZONTAL
-        modes.setPadding(0, a.dp(10), 0, a.dp(4))
+        // Productivity / Developer.
+        val seg = LinearLayout(a)
+        seg.orientation = LinearLayout.HORIZONTAL
+        seg.background = rounded(if (light) 0xFFEFE9E0.toInt() else c(R.color.surface), dp(14))
+        seg.setPadding(dp(4), dp(4), dp(4), dp(4))
         for ((label, value) in listOf("Productivity" to false, "Developer" to true)) {
-            val c = a.chip(label, developer == value)
-            c.setOnClickListener {
+            val on = developer == value
+            val b = a.mtext(label, 13.5f, if (on) 700 else 600, c(if (on) R.color.text_primary else R.color.text_secondary))
+            b.gravity = Gravity.CENTER
+            if (on) {
+                b.background = rounded(if (light) 0xFFFFFFFF.toInt() else c(R.color.line), dp(10))
+                b.elevation = dp(1).toFloat()
+            }
+            b.setOnClickListener {
                 p.edit().putBoolean("notesDeveloper", value).apply()
                 query = ""
                 rerender()
             }
-            modes.addView(c)
-            (c.layoutParams as LinearLayout.LayoutParams).marginEnd = a.dp(8)
+            seg.addView(b, LinearLayout.LayoutParams(0, dp(36), 1f))
         }
-        list.addView(modes)
+        val segLp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        segLp.topMargin = dp(14)
+        list.addView(seg, segLp)
 
         // Search over all notes; the results update while typing without rebuilding the field.
+        val bar = LinearLayout(a)
+        bar.orientation = LinearLayout.HORIZONTAL
+        bar.gravity = Gravity.CENTER_VERTICAL
+        bar.background = rounded(raised(), dp(14))
+        bar.elevation = if (light) dp(1).toFloat() else 0f
+        bar.setPadding(dp(14), 0, dp(8), 0)
+        val glass = ImageView(a)
+        glass.setImageResource(R.drawable.ic_search)
+        glass.setColorFilter(c(R.color.text_dim))
+        bar.addView(glass, LinearLayout.LayoutParams(dp(18), dp(18)))
         val search = EditText(a)
-        search.hint = "Search all notes"
+        search.hint = "Search notes"
         search.textSize = 15f
+        search.typeface = Fonts.manrope(a, 500)
         search.maxLines = 1
         search.inputType = InputType.TYPE_CLASS_TEXT
         search.imeOptions = EditorInfo.IME_ACTION_SEARCH
-        search.background = rounded(a.getColor(R.color.surface), a.dp(14))
-        search.setPadding(a.dp(16), a.dp(12), a.dp(16), a.dp(12))
-        search.setTextColor(a.getColor(R.color.text_primary))
-        search.setHintTextColor(a.getColor(R.color.text_dim))
+        search.background = null
+        search.setPadding(dp(10), 0, 0, 0)
+        search.setTextColor(c(R.color.text_primary))
+        search.setHintTextColor(c(R.color.text_dim))
         search.setText(query)
-        val sLp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        sLp.topMargin = a.dp(10)
-        list.addView(search, sLp)
+        bar.addView(search, LinearLayout.LayoutParams(0, dp(44), 1f))
+        val sLp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
+        sLp.topMargin = dp(14)
+        list.addView(bar, sLp)
 
         val content = LinearLayout(a)
         content.orientation = LinearLayout.VERTICAL
@@ -180,23 +234,17 @@ class NotesPage(private val a: Activity, private val rerender: () -> Unit) {
         })
     }
 
-    private fun label(into: LinearLayout, text: String) {
-        val tv = TextView(a)
-        tv.text = text.uppercase()
-        tv.textSize = 11f
-        tv.letterSpacing = 0.14f
-        tv.setTextColor(a.getColor(R.color.text_dim))
-        tv.setPadding(0, a.dp(22), 0, a.dp(4))
+    private fun empty(into: LinearLayout, text: String) {
+        val tv = a.mtext(text, 14.5f, 500, c(R.color.text_dim))
+        tv.setLineSpacing(dp(3).toFloat(), 1f)
+        tv.setPadding(0, dp(16), 0, dp(8))
         into.addView(tv)
     }
 
-    private fun empty(into: LinearLayout, text: String) {
-        val tv = TextView(a)
-        tv.text = text
-        tv.textSize = 15f
-        tv.setLineSpacing(a.dp(3).toFloat(), 1f)
-        tv.setTextColor(a.getColor(R.color.text_dim))
-        tv.setPadding(0, a.dp(14), 0, a.dp(8))
+    private fun section(into: LinearLayout, text: String) {
+        val tv = a.mtext(text.uppercase(), 11f, 700, c(R.color.text_dim))
+        tv.letterSpacing = 0.08f
+        tv.setPadding(0, dp(20), 0, dp(2))
         into.addView(tv)
     }
 
@@ -208,68 +256,197 @@ class NotesPage(private val a: Activity, private val rerender: () -> Unit) {
         val q = query.trim()
         if (q.isNotEmpty()) {
             val found = Store.notes.items.filter { matches(it, q) }.sortedByDescending { it.updated }
-            label(content, plural(found.size, "note") + " found")
+            section(content, plural(found.size, "note") + " found")
             if (found.isEmpty()) empty(content, "Nothing matches \"$q\".")
-            for (n in found) content.addView(a.noteCard(n, today))
+            for (n in found) content.addView(card(n, today))
             return
         }
-
-        val add = a.chip(if (developer) "+  New developer note" else "+  New note", true)
-        add.setPadding(a.dp(18), a.dp(11), a.dp(18), a.dp(11))
-        add.setOnClickListener { a.openNote(null, developer) }
-        val row = LinearLayout(a)
-        row.orientation = LinearLayout.HORIZONTAL
-        row.setPadding(0, a.dp(14), 0, 0)
-        row.addView(add)
-        content.addView(row)
 
         if (!developer) {
             val notes = Store.notes.items.filter { !it.developer }
             val pinned = notes.filter { val p = it.pin; p != null && !p.isBefore(today) }.sortedBy { it.pin }
             val rest = notes.filter { it !in pinned }.sortedByDescending { it.updated }
-            if (notes.isEmpty()) empty(content, "Ideas, lists, plans. Pin a note to a day to see it in that day's plan.")
+            if (notes.isEmpty()) empty(content, "Ideas, lists, plans. Pin a note to a day to see it in that day's plan. Tap + to start one.")
             if (pinned.isNotEmpty()) {
-                label(content, "Pinned to a day")
-                for (n in pinned) content.addView(a.noteCard(n, today))
+                section(content, "Pinned to a day")
+                for (n in pinned) content.addView(card(n, today))
             }
             if (rest.isNotEmpty()) {
-                if (pinned.isNotEmpty()) label(content, "Other notes")
-                for (n in rest) content.addView(a.noteCard(n, today))
+                if (pinned.isNotEmpty()) section(content, "Other notes")
+                for (n in rest) content.addView(card(n, today))
             }
+            content.addView(View(a), LinearLayout.LayoutParams(1, dp(80)))   // room for the + button
             return
         }
 
-        // Developer notes: open ones by type, then the done ones.
+        // Developer: the Copy for Claude bar, filter chips, then the notes.
         val notes = Store.notes.items.filter { it.developer }
         val open = notes.filter { it.open }
-        val copy = a.chip("Copy for Claude  (" + open.size + ")", open.isNotEmpty())
-        copy.setPadding(a.dp(18), a.dp(11), a.dp(18), a.dp(11))
+        val copyBar = LinearLayout(a)
+        copyBar.orientation = LinearLayout.HORIZONTAL
+        copyBar.gravity = Gravity.CENTER_VERTICAL
+        // Inverted colours: dark on the light theme, light on the dark ones.
+        val barBg = if (light) 0xFF1A1714.toInt() else c(R.color.text_primary)
+        val barFg = if (light) 0xFFFAF7F2.toInt() else c(R.color.bg)
+        copyBar.background = rounded(barBg, dp(18))
+        copyBar.setPadding(dp(16), dp(14), dp(14), dp(14))
+        val words = LinearLayout(a)
+        words.orientation = LinearLayout.VERTICAL
+        words.addView(a.mtext(plural(open.size, "open note"), 15f, 700, barFg))
+        val counts = TYPES.mapNotNull { (key, name) ->
+            val n = open.count { it.type == key }
+            if (n == 0) null else "$n " + (if (n == 1) name.lowercase() else name.lowercase() + "s")
+        }
+        val version = try {
+            a.packageManager.getPackageInfo(a.packageName, 0).versionName
+        } catch (e: Exception) {
+            null
+        }
+        val sub = a.mtext((counts + listOfNotNull(version?.let { "Summit $it" })).joinToString("  ·  "), 12.5f, 500, withAlpha(barFg, 0xB8))
+        sub.setPadding(0, dp(3), 0, 0)
+        words.addView(sub)
+        copyBar.addView(words, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val copy = LinearLayout(a)
+        copy.orientation = LinearLayout.HORIZONTAL
+        copy.gravity = Gravity.CENTER
+        copy.background = rippled(rounded(0xFFFF8552.toInt(), dp(20)), 0xFF1A0D06.toInt())
+        copy.setPadding(dp(14), 0, dp(14), 0)
+        val ci = ImageView(a)
+        ci.setImageResource(R.drawable.ic_copy)
+        ci.setColorFilter(0xFF1A0D06.toInt())
+        copy.addView(ci, LinearLayout.LayoutParams(dp(16), dp(16)))
+        val ct = a.mtext("Copy for Claude", 13.5f, 800, 0xFF1A0D06.toInt())
+        ct.setPadding(dp(6), 0, 0, 0)
+        copy.addView(ct)
+        copy.alpha = if (open.isEmpty()) 0.45f else 1f
         copy.setOnClickListener {
             if (open.isEmpty()) {
                 Toast.makeText(a, "No open developer notes to copy.", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             val (prompt, count) = claudePrompt(a)
-            val cm = a.getSystemService(ClipboardManager::class.java)
-            cm?.setPrimaryClip(ClipData.newPlainText("Summit notes for Claude", prompt))
+            a.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("Summit notes for Claude", prompt))
+            copy.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
             Toast.makeText(a, "Copied ${plural(count, "open note")}. Paste it in Claude. Mark notes Done when they are fixed.",
                 Toast.LENGTH_LONG).show()
         }
-        row.addView(copy)
-        (copy.layoutParams as LinearLayout.LayoutParams).marginStart = a.dp(8)
+        copyBar.addView(copy, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)))
+        val cbl = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        cbl.topMargin = dp(14)
+        content.addView(copyBar, cbl)
 
-        if (notes.isEmpty()) empty(content, "Bugs, ideas and changes for Summit itself. \"Copy for Claude\" turns the open ones into one prompt.")
-        for ((type, name) in TYPES) {
-            val group = open.filter { it.type == type }.sortedBy { it.created }
-            if (group.isEmpty()) continue
-            label(content, name + "s  ·  open")
-            for (n in group) content.addView(a.noteCard(n, today))
+        // Filter chips: Open, Bug, Idea, Change, Done.
+        val p = prefs(a)
+        val filter = p.getString("notesFilter", "open") ?: "open"
+        val chips = HorizontalScrollView(a)
+        chips.isHorizontalScrollBarEnabled = false
+        val row = LinearLayout(a)
+        row.orientation = LinearLayout.HORIZONTAL
+        chips.addView(row)
+        for ((key, label) in listOf("open" to "Open", "bug" to "Bug", "idea" to "Idea", "change" to "Change", "done" to "Done")) {
+            val on = filter == key
+            val chip = a.mtext(label, 13f, if (on) 700 else 600, if (on) barFg else c(R.color.text_secondary))
+            chip.gravity = Gravity.CENTER
+            chip.setPadding(dp(14), 0, dp(14), 0)
+            chip.background = if (on) rounded(barBg, dp(17)) else rounded(0, dp(17), if (light) 0xFFE2DACE.toInt() else c(R.color.line), dp(1))
+            chip.setOnClickListener {
+                p.edit().putString("notesFilter", key).apply()
+                fill(content, developer, today)
+            }
+            val l = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(34))
+            l.marginEnd = dp(8)
+            row.addView(chip, l)
         }
-        val done = notes.filter { !it.open }.sortedByDescending { it.updated }
-        if (done.isNotEmpty()) {
-            label(content, "Done")
-            for (n in done) content.addView(a.noteCard(n, today))
+        val chl = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        chl.topMargin = dp(14)
+        content.addView(chips, chl)
+
+        val shown = when (filter) {
+            "done" -> notes.filter { !it.open }.sortedByDescending { it.updated }
+            "open" -> open.sortedBy { it.created }
+            else -> open.filter { it.type == filter }.sortedBy { it.created }
         }
+        if (notes.isEmpty()) empty(content, "Bugs, ideas and changes for Summit itself. \"Copy for Claude\" turns the open ones into one prompt. Tap + to add one.")
+        else if (shown.isEmpty()) empty(content, if (filter == "done") "Nothing marked Done yet." else "No open notes here.")
+        for (n in shown) content.addView(card(n, today))
+        content.addView(View(a), LinearLayout.LayoutParams(1, dp(80)))
+    }
+
+    /** "Today, 09:12", "Yesterday", "24 Nov". */
+    private fun stamp(ms: Long, today: LocalDate): String {
+        val t = java.time.Instant.ofEpochMilli(ms).atZone(java.time.ZoneId.systemDefault())
+        val d = t.toLocalDate()
+        return when (d) {
+            today -> "Today, " + fmtTime(t.hour * 60 + t.minute)
+            today.minusDays(1) -> "Yesterday"
+            else -> dayMonth(d).let { if (d.year != today.year) "$it ${d.year}" else it }.replace(Regex("^(\\d+) (\\w{3})\\w*"), "$1 $2")
+        }
+    }
+
+    /** The tag colours: (text, background). */
+    private fun tagColors(type: String): Pair<Int, Int> = when (type) {
+        "bug" -> if (light) 0xFFB42E2E.toInt() to 0xFFFCE8E6.toInt() else 0xFFFF8A80.toInt() to 0xFF3A1E1E.toInt()
+        "change" -> if (light) 0xFF6A3FB8.toInt() to 0xFFEFE8FB.toInt() else 0xFFC7A8FF.toInt() to 0xFF2B2140.toInt()
+        else -> if (light) 0xFF2459B3.toInt() to 0xFFE5EEFC.toInt() else 0xFF8DB8FF.toInt() to 0xFF1B2A44.toInt()
+    }
+
+    private fun card(n: Note, today: LocalDate): View {
+        val card = LinearLayout(a)
+        card.orientation = LinearLayout.VERTICAL
+        card.background = rippled(rounded(raised(), dp(16)), c(R.color.text_primary))
+        card.elevation = if (light) dp(1).toFloat() else 0f
+        card.setPadding(dp(14), dp(14), dp(14), dp(14))
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = dp(10)
+        card.layoutParams = lp
+
+        val top = LinearLayout(a)
+        top.orientation = LinearLayout.HORIZONTAL
+        top.gravity = Gravity.CENTER_VERTICAL
+        fun tag(text: String, fg: Int, bg: Int) {
+            val t = a.mtext(text, 11f, 800, fg)
+            t.letterSpacing = 0.05f
+            t.background = rounded(bg, dp(7))
+            t.setPadding(dp(8), dp(3), dp(8), dp(3))
+            val l = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            l.marginEnd = dp(8)
+            top.addView(t, l)
+        }
+        if (n.developer) {
+            val (fg, bg) = tagColors(n.type)
+            tag(typeName(n.type).uppercase(), fg, bg)
+            if (!n.open) tag("DONE", c(R.color.text_secondary), withAlpha(c(R.color.text_primary), 0x10))
+        } else {
+            val pin = n.pin
+            if (pin != null) tag("PINNED  ·  " + relDay(pin, today).uppercase(), c(R.color.accent), c(R.color.accent_soft))
+        }
+        top.addView(a.mtext(stamp(n.created, today), 12f, 500, c(R.color.text_dim)))
+        card.addView(top)
+
+        val head = n.title.ifBlank { n.text.lineSequence().firstOrNull { it.isNotBlank() } ?: "Untitled note" }
+        val title = a.mtext(head, 15f, 700, c(if (n.developer && !n.open) R.color.text_secondary else R.color.text_primary))
+        title.maxLines = 2
+        title.ellipsize = android.text.TextUtils.TruncateAt.END
+        title.setPadding(0, dp(8), 0, 0)
+        if (n.developer && !n.open) title.paintFlags = title.paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG
+        card.addView(title)
+        val body = n.text.trim().let { if (n.title.isBlank()) it.substringAfter('\n', "").trim() else it }
+        if (body.isNotEmpty()) {
+            val tv = a.mtext(body, 13f, 500, c(R.color.text_secondary))
+            tv.maxLines = 3
+            tv.ellipsize = android.text.TextUtils.TruncateAt.END
+            tv.setLineSpacing(dp(2).toFloat(), 1f)
+            tv.setPadding(0, dp(6), 0, 0)
+            card.addView(tv)
+        }
+        if (n.items.isNotEmpty()) {
+            val done = n.items.count { it.done }
+            val tv = a.mtext("$done/${n.items.size} ticked", 12f, 600, c(R.color.text_dim))
+            tv.setPadding(0, dp(8), 0, 0)
+            card.addView(tv)
+        }
+        card.setOnClickListener { a.openNote(n) }
+        return card
     }
 }
 

@@ -112,15 +112,7 @@ class SettingsActivity : Activity() {
             Reminders.schedule(this)
             render()
         }
-        val habitMinutes = p.getInt("habitTime", 21 * 60)
-        row("Time", fmtTime(habitMinutes), 0) {
-            TimePickerDialog(this, R.style.AppDialog, { _, h, m ->
-                p.edit().putInt("habitTime", h * 60 + m).apply()
-                Reminders.schedule(this)
-                render()
-            }, habitMinutes / 60, habitMinutes % 60, true).show()
-        }
-        note("A notification at this time if a habit planned for today is not ticked yet.")
+        note("A notification in the evening if a habit planned for today is not linked yet. Each habit has its own time (Chains → hold a habit → Edit).")
 
         label("Phone calendar")
         val events = PhoneCalendar.enabled(this)

@@ -52,19 +52,29 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
   Category: `#gym`, or a word that is a category name. Priority: `!high`, `!low`.
 - **Widgets**: hold an empty spot on the home screen → Widgets → Summit. "Summit: today" lists
   all of today's tasks; "Summit: important" is smaller and lists only High and Medium tasks
-  (scrolls if they do not fit). Tap a task to tick it, tap + to add.
+  (scrolls if they do not fit), with today's habits as small flames below; tap a task to tick
+  it, a flame to link that habit, + to add a task.
 - **Theme**: Settings → Theme switches Dark (default) → Grey (a softer charcoal) → Light, per
   device. All screens and both widgets follow it.
-- **Chains** (don't break the chain): add habits with the weekdays they are planned for. Tick
-  today or yesterday; a link snaps onto the chain, the streak counts up, and the chain glows
-  warmer the longer it gets. Days a habit is not planned never break it. Badges with a
-  celebration at 7, 30 and 100 days. Hold a habit to edit, mark (★) or delete it. The calendar
-  below shows one habit, the marked ones, or all. A reminder comes in the evening if a habit
-  planned for today is not ticked yet (Settings → Chains, default 21:00).
+- **Chains** (don't break the chain), flame cards: switch One / Marked / All at the top.
+  One shows a big card per habit (swipe sideways, page dots): a giant streak number over a
+  flame that burns warmer and brighter the longer the chain, the last 5 weeks (this week as
+  interlocking links), badges and a big **Link today** button. Linking: a firm vibration, the
+  flame flares with sparks and rings, the number rolls up with +1. Marked and All show mini
+  cards and a month where a day with every planned habit linked glows. Only today and
+  yesterday can be linked ("Forgot yesterday?" box). Badges at 7, 30 and 100 days with a
+  full-screen moment ("Keep climbing" closes it). After a habit's evening reminder its flame
+  flickers until linked. A broken chain shows the best streak and a fresh start.
+  Each habit has a name, colour, days, Mark, an evening reminder time and an optional
+  **streak freeze** (off by default: one missed planned day a month is forgiven; the card
+  says when). Hold a card to edit, mark or delete it.
+- **Task ↔ habit**: in the task form, pick a Habit. Ticking that task links the habit for the
+  day, and linking the habit ticks the task.
 - **Notes**: switch between Productivity and Developer at the top; the search field looks
-  through all notes. Productivity notes can have a checklist and be pinned to a day (then they
+  through all notes; + adds a note. Productivity notes can have a checklist and be pinned to a day (then they
   show on that day on the Today page, in Calendar → Day, and in the evening planning before it). Developer notes are about
-  Summit itself, with a type (Bug, Idea, Change) and status (Open, Done). **Copy for Claude**
+  Summit itself, with a type (Bug, Idea, Change) and status (Open, Done), and filter chips
+  Open / Bug / Idea / Change / Done. The **Copy for Claude** bar shows the open ones by type;
   turns all open developer notes into one prompt (grouped by type, with the app version) on the
   clipboard; mark notes Done once an update has them.
 - **Courses** (cap icon on Today): Summit finds course codes like "ECON 101" in the phone
@@ -104,6 +114,8 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
 2. **Done**: home-screen widget, streaks and stats, focus timer, smart quick-add, evening planning.
 3. **Done**: phone calendar events next to tasks; sync between phone and tablet (switched on
    in 3.2 with the Firebase file in the repo).
+5. **Done (4.2)**: Chains as flame cards, Notes redesign (Manrope font), task ↔ habit,
+   streak freeze, habit flames on the small widget.
 4. **Done (4.0)**: swipe between days, small widget, light theme, Notes, Chains, course mode
    with exam countdown and study blocks, assignment breakdown, class reviews, Sunday review.
 

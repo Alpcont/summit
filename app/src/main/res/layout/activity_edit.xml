@@ -140,6 +140,17 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content" />
 
+            <!-- A habit this task belongs to: ticking the task links the habit and the other way round. -->
+            <TextView
+                android:id="@+id/label_habit"
+                style="@style/Label"
+                android:text="@string/label_habit" />
+
+            <com.alp.summit.FlowLayout
+                android:id="@+id/habit_chips"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content" />
+
             <TextView
                 style="@style/Label"
                 android:text="@string/label_subtasks" />

@@ -86,6 +86,33 @@ object Look {
     }
 }
 
+// ---------- Manrope, the font of the Notes and Chains screens (bundled in assets/fonts) ----------
+
+object Fonts {
+    private val cache = HashMap<Int, Typeface>()
+
+    /** Manrope at a weight from 200 to 800. Falls back to the system font if the file cannot be read. */
+    fun manrope(ctx: Context, weight: Int): Typeface = cache.getOrPut(weight) {
+        try {
+            Typeface.Builder(ctx.assets, "fonts/Manrope.ttf").setFontVariationSettings("'wght' $weight").build()
+                ?: Typeface.DEFAULT
+        } catch (e: Exception) {
+            Typeface.create("sans-serif", if (weight >= 600) Typeface.BOLD else Typeface.NORMAL)
+        }
+    }
+}
+
+/** A TextView in Manrope. */
+fun Context.mtext(text: CharSequence, size: Float, weight: Int, color: Int): TextView {
+    val tv = TextView(this)
+    tv.text = text
+    tv.textSize = size
+    tv.typeface = Fonts.manrope(this, weight)
+    tv.setTextColor(color)
+    tv.includeFontPadding = false
+    return tv
+}
+
 // ---------- Small UI helpers ----------
 
 fun Context.dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()

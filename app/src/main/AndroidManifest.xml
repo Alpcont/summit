@@ -8,6 +8,8 @@
         android:name="android.permission.SCHEDULE_EXACT_ALARM"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- A firm double click when a habit is linked. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Optional: show the phone calendar's events next to tasks (read only, asked for in Settings). -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
 

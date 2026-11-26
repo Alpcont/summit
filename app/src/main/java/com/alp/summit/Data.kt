@@ -38,6 +38,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
     val spentDay = HashMap<String, Int>()  // the same minutes per day (a repeating task starts fresh every day)
     var origin = ""                    // made by Summit for something: "study|course|exam|day", "asg|id", "review|course|day"
     var moves = 0                      // how often it was moved to another day (for the weekly review)
+    var habitId = ""                   // a habit this task is connected to: ticking one links the other
     var created = System.currentTimeMillis()
     var updated = created
     var syncHash = 0                   // fingerprint of the content last exchanged with the cloud; 0 = never
@@ -68,7 +69,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
         title = o.title; notes = o.notes; date = o.date; time = o.time; duration = o.duration
         priority = o.priority; categoryId = o.categoryId; repeatMask = o.repeatMask; endDate = o.endDate
         remind = o.remind; done = o.done; rank = o.rank; spent = o.spent; created = o.created; updated = o.updated
-        origin = o.origin; moves = o.moves
+        origin = o.origin; moves = o.moves; habitId = o.habitId
         doneDates.clear(); doneDates.addAll(o.doneDates)
         skipDates.clear(); skipDates.addAll(o.skipDates)
         subDone.clear(); subDone.addAll(o.subDone)
@@ -80,7 +81,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
     fun copyTo(d: LocalDate): Task {
         val c = Task()
         c.title = title; c.notes = notes; c.date = d; c.time = time; c.duration = duration
-        c.priority = priority; c.categoryId = categoryId; c.remind = remind
+        c.priority = priority; c.categoryId = categoryId; c.remind = remind; c.habitId = habitId
         for (s in subtasks) c.subtasks.add(Subtask(UUID.randomUUID().toString(), s.title))
         return c
     }
@@ -204,6 +205,7 @@ object Store {
         // Newer fields are only written when used, so older tasks keep the same fingerprint.
         if (t.origin.isNotEmpty()) o.put("origin", t.origin)
         if (t.moves > 0) o.put("moves", t.moves)
+        if (t.habitId.isNotEmpty()) o.put("habit", t.habitId)
         return o
     }
 
@@ -252,6 +254,7 @@ object Store {
         t.syncHash = j.optInt("syncHash", 0)
         t.origin = j.optString("origin")
         t.moves = j.optInt("moves", 0)
+        t.habitId = j.optString("habit")
         return t
     }
 
@@ -533,6 +536,38 @@ object Store {
             t.done = value
         }
         t.updated = System.currentTimeMillis()
+        // A task connected to a habit links (or unlinks) that habit for the day, if the day can still be linked.
+        val h = habits.get(t.habitId)
+        val day = d ?: t.date ?: LocalDate.now()
+        if (h != null && h.linkable(day, LocalDate.now()) && h.ticked(day) != value) linkHabit(h, day, value)
+    }
+
+    /** A milestone (7, 30, 100) just earned by linking, for a screen to celebrate once: (habit id, days). */
+    var milestone: Pair<String, Int>? = null
+
+    /**
+     * Links or unlinks a habit for a day. Tasks connected to the habit on that day are ticked or
+     * unticked with it. Linking can earn a badge (see `milestone`).
+     */
+    fun linkHabit(h: Habit, d: LocalDate, on: Boolean) {
+        if (on) h.ticks.add(d.toString()) else h.ticks.remove(d.toString())
+        h.touch()
+        val now = System.currentTimeMillis()
+        for (t in tasks) if (t.habitId == h.id && t.occursOn(d) && t.isDone(d) != on) {
+            if (t.repeating) {
+                if (on) t.doneDates.add(d.toString()) else t.doneDates.remove(d.toString())
+            } else {
+                t.done = on
+            }
+            t.updated = now
+        }
+        if (on) {
+            val streak = h.streak(LocalDate.now())
+            for (m in intArrayOf(7, 30, 100)) if (streak >= m && m !in h.badges) {
+                h.badges.add(m)
+                milestone = Pair(h.id, m)
+            }
+        }
     }
 
     fun move(t: Task, d: LocalDate?) {
@@ -687,7 +722,10 @@ private fun stringSet(a: JSONArray?): HashSet<String> {
 class Habit(id: String = UUID.randomUUID().toString()) : Synced(id) {
     var title = ""
     var mask = 127                       // weekdays it is planned: bit 0 = Monday ... bit 6 = Sunday
-    var marked = false                   // starred, for the "Marked" calendar view
+    var marked = false                   // starred, for the "Marked" view
+    var color = 0xFFFF8552.toInt()
+    var remindAt = 21 * 60               // evening reminder (minutes) if not linked yet; -1 = none
+    var freeze = false                   // streak freeze: one missed planned day per month is forgiven
     var start: LocalDate = LocalDate.now().minusDays(1)   // days before this never break the chain
     val ticks = HashSet<String>()        // days it was done
     val badges = HashSet<Int>()          // 7, 30 and 100-day badges already earned
@@ -696,26 +734,48 @@ class Habit(id: String = UUID.randomUUID().toString()) : Synced(id) {
     fun planned(d: LocalDate): Boolean = mask and (1 shl (d.dayOfWeek.value - 1)) != 0
     fun ticked(d: LocalDate): Boolean = d.toString() in ticks
 
-    /** Planned days in a row that were ticked. Unplanned days are skipped; an unticked today does not break it yet. */
-    fun streak(today: LocalDate): Int {
+    /** Only today and yesterday can be linked, and only on days the habit is planned. */
+    fun linkable(d: LocalDate, today: LocalDate): Boolean =
+        planned(d) && (d == today || d == today.minusDays(1)) && !d.isBefore(start)
+
+    /** Planned, not linked, and before today: a miss (which a streak freeze may forgive). */
+    fun missed(d: LocalDate, today: LocalDate): Boolean = planned(d) && !ticked(d) && d.isBefore(today) && !d.isBefore(start)
+
+    /**
+     * The current chain: (linked planned days in a row, days the streak freeze forgave in it).
+     * Unplanned days are skipped; an unlinked today does not break it yet. With the freeze on,
+     * the first missed planned day of each calendar month is forgiven.
+     */
+    fun chain(today: LocalDate): Pair<Int, List<LocalDate>> {
         var n = 0
+        val forgiven = ArrayList<LocalDate>()
+        val used = HashSet<java.time.YearMonth>()
         var d = today
         while (!d.isBefore(start)) {
             if (planned(d)) {
-                if (ticked(d)) n++ else if (d != today) break
+                if (ticked(d)) n++
+                else if (d != today) {
+                    if (freeze && used.add(java.time.YearMonth.from(d))) forgiven.add(d) else break
+                }
             }
             d = d.minusDays(1)
         }
-        return n
+        return Pair(n, forgiven)
     }
+
+    fun streak(today: LocalDate): Int = chain(today).first
 
     fun best(today: LocalDate): Int {
         var best = 0
         var run = 0
+        val used = HashSet<java.time.YearMonth>()
         var d = start
         while (!d.isAfter(today)) {
             if (planned(d)) {
-                if (ticked(d)) run++ else if (d != today) run = 0
+                if (ticked(d)) run++
+                else if (d != today) {
+                    if (!(freeze && used.add(java.time.YearMonth.from(d)))) run = 0
+                }
                 best = maxOf(best, run)
             }
             d = d.plusDays(1)
@@ -725,6 +785,7 @@ class Habit(id: String = UUID.randomUUID().toString()) : Synced(id) {
 
     override fun json(): JSONObject = JSONObject()
         .put("id", id).put("title", title).put("mask", mask).put("marked", marked)
+        .put("color", color).put("remind", remindAt).put("freeze", freeze)
         .put("start", start.toString()).put("ticks", JSONArray(ticks.sorted()))
         .put("badges", JSONArray(badges.sorted())).put("created", created).put("updated", updated)
 
@@ -734,6 +795,9 @@ class Habit(id: String = UUID.randomUUID().toString()) : Synced(id) {
             h.title = j.optString("title")
             h.mask = j.optInt("mask", 127)
             h.marked = j.optBoolean("marked", false)
+            h.color = j.optInt("color", h.color)
+            h.remindAt = j.optInt("remind", 21 * 60)
+            h.freeze = j.optBoolean("freeze", false)
             j.dateOrNull("start")?.let { h.start = it }
             h.ticks.addAll(stringSet(j.optJSONArray("ticks")))
             val b = j.optJSONArray("badges")

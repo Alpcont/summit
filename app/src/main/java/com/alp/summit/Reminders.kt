@@ -33,7 +33,7 @@ object Reminders {
     private const val HABITS = 3
     private const val STALE = 3 * 60 * 60_000L   // do not show reminders more than 3 hours late
 
-    private class Event(val at: Long, val task: Task?, val date: LocalDate, val kind: Int)
+    private class Event(val at: Long, val task: Task?, val date: LocalDate, val kind: Int, val minutes: Int = -1)
 
     private fun millis(d: LocalDate, minutes: Int): Long =
         d.atStartOfDay(ZoneId.systemDefault()).plusMinutes(minutes.toLong()).toInstant().toEpochMilli()
@@ -54,9 +54,12 @@ object Reminders {
                 val a = millis(d, p.getInt("eveningTime", 21 * 60 + 30))
                 if (a > from && a <= to) out.add(Event(a, null, d, EVENING))
             }
-            if (p.getBoolean("habitRemind", true) && Store.habits.items.isNotEmpty()) {
-                val a = millis(d, p.getInt("habitTime", 21 * 60))
-                if (a > from && a <= to) out.add(Event(a, null, d, HABITS))
+            // Each habit has its own evening time; one notification per time.
+            if (p.getBoolean("habitRemind", true)) {
+                for (m in Store.habits.items.filter { it.remindAt >= 0 }.map { it.remindAt }.distinct()) {
+                    val a = millis(d, m)
+                    if (a > from && a <= to) out.add(Event(a, null, d, HABITS, m))
+                }
             }
             for (t in Store.tasks) {
                 if (t.time < 0 || t.remind < 0 || !t.occursOn(d) || t.isDone(d)) continue
@@ -260,18 +263,18 @@ object Reminders {
         val t = e.task
         if (e.kind == HABITS) {
             // Only if a habit planned for today is still unticked.
-            val left = Store.habits.items.filter { it.planned(e.date) && !it.ticked(e.date) }
+            val left = Store.habits.items.filter { it.remindAt == e.minutes && it.planned(e.date) && !it.ticked(e.date) && !e.date.isBefore(it.start) }
             if (left.isEmpty()) return
             open.putExtra("chains", true)
             val n = Notification.Builder(ctx, CH_DAILY)
                 .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle(if (left.size == 1) "Keep your chain going" else "Keep your chains going")
-                .setContentText("Not ticked yet today: " + left.joinToString(", ") { it.title })
+                .setContentText("Not linked yet today: " + left.joinToString(", ") { it.title })
                 .setColor(ctx.getColor(R.color.accent))
                 .setContentIntent(PendingIntent.getActivity(ctx, 5, open, flags))
                 .setAutoCancel(true)
                 .build()
-            nm.notify(5, n)
+            nm.notify(5000 + e.minutes, n)
             return
         }
         if (e.kind == EVENING) {

@@ -30,6 +30,7 @@
     <string name="label_duration">Estimated duration</string>
     <string name="label_priority">Priority</string>
     <string name="label_category">Category</string>
+    <string name="label_habit">Habit (linking one links the other)</string>
     <string name="label_subtasks">Subtasks</string>
     <string name="label_notes">Notes</string>
     <string name="subtask_hint">Add a subtask</string>

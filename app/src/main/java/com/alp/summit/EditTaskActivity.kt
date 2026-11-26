@@ -40,6 +40,7 @@ class EditTaskActivity : Activity() {
     private var duration = 0
     private var priority = 2
     private var category = ""
+    private var habit = ""
     private val subs = ArrayList<Subtask>()
 
     private lateinit var titleInput: EditText
@@ -69,6 +70,7 @@ class EditTaskActivity : Activity() {
             duration = t.duration
             priority = t.priority
             category = t.categoryId
+            habit = t.habitId
             for (s in t.subtasks) subs.add(Subtask(s.id, s.title))
             titleInput.setText(t.title)
             notesInput.setText(t.notes)
@@ -178,6 +180,16 @@ class EditTaskActivity : Activity() {
         categoryRow.removeAllViews()
         for (c in Store.categories) {
             add(categoryRow, c.name, category == c.id, Look.tone(c.color)) { category = if (category == c.id) "" else c.id }
+        }
+
+        // Connect the task to a habit (only when there are habits).
+        val habitRow = findViewById<FlowLayout>(R.id.habit_chips)
+        habitRow.removeAllViews()
+        val habits = Store.habits.items.sortedBy { it.created }
+        findViewById<View>(R.id.label_habit).visibility = if (habits.isEmpty()) View.GONE else View.VISIBLE
+        if (habits.isNotEmpty()) {
+            add(habitRow, "None", habit.isEmpty()) { habit = "" }
+            for (h in habits) add(habitRow, h.title, habit == h.id, Look.tone(h.color)) { habit = if (habit == h.id) "" else h.id }
         }
 
         val subList = findViewById<LinearLayout>(R.id.sub_list)
@@ -299,6 +311,7 @@ class EditTaskActivity : Activity() {
         t.duration = duration
         t.priority = priority
         t.categoryId = category
+        t.habitId = habit
         t.subtasks.clear()
         t.subtasks.addAll(subs)
         val ids = subs.map { it.id }

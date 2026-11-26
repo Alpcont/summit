@@ -236,6 +236,7 @@ class MainActivity : Activity() {
         firstShow = false
         // Changes from the other device slide into place while the app is open.
         Sync.onRemoteChange = { if (!gestureActive) renderMoving() }
+        celebrateBadge()
         Reminders.schedule(this)
         if (openPlan) {
             openPlan = false
@@ -377,6 +378,7 @@ class MainActivity : Activity() {
         rows.clear()
         refreshHeader = {}
         entering = motion == PAGE
+        notesPage.showFab(tab == 3)
         when (tab) {
             0 -> renderToday()
             1 -> renderCalendar()
@@ -977,6 +979,7 @@ class MainActivity : Activity() {
             }
         )
         if (dayDone) list.postDelayed({ celebrate() }, 400)
+        if (Store.milestone != null) list.postDelayed({ celebrateBadge() }, if (dayDone) 3400 else 500)
         render()
     }
 
@@ -1128,8 +1131,17 @@ class MainActivity : Activity() {
             }
         )
         if (dayDone) list.postDelayed({ celebrate() }, 500)
+        if (Store.milestone != null) list.postDelayed({ celebrateBadge() }, if (dayDone) 3400 else 500)
         val token = ++settleToken
         list.postDelayed({ if (token == settleToken && !gestureActive) renderMoving() }, 430)
+    }
+
+    /** A task connected to a habit (or the widget) earned a chain badge: show its moment once. */
+    private fun celebrateBadge() {
+        val m = Store.milestone ?: return
+        if (isFinishing) return
+        Store.milestone = null
+        Store.habits.get(m.first)?.let { showMilestone(this, it, m.second) }
     }
 
     /** The full-screen moment when every task of today is done. */
@@ -1220,6 +1232,7 @@ class MainActivity : Activity() {
         if (t.duration > 0) part(fmtDuration(t.duration))
         Store.courseOf(t)?.let { part(it.code, Look.tone(it.color)) }
         if (cat != null) part(cat.name, Look.tone(cat.color))
+        Store.habits.get(t.habitId)?.let { part("Chain: " + it.title, Look.tone(it.color)) }
         if (t.repeating) part(repeatLabel(t.repeatMask))
         if (t.subtasks.isNotEmpty()) {
             val ticked = t.subtasks.count { t.subKey(d, it) in t.subDone }
