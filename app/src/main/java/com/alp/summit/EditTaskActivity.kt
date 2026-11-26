@@ -140,15 +140,15 @@ class EditTaskActivity : Activity() {
         remindRow.visibility = if (showRemind) View.VISIBLE else View.GONE
         // Several can be on at once; "Custom" adds any amount before.
         add(remindRow, "Off", reminds.isEmpty()) { reminds.clear() }
-        val presets = listOf(0, 10, 30, 60, 24 * 60)
-        for (m in (presets + reminds).distinct().sorted()) {
+        val remindPresets = listOf(0, 10, 30, 60, 24 * 60)
+        for (m in (remindPresets + reminds).distinct().sorted()) {
             add(remindRow, if (m == 0) "At the time" else beforeLabel(m) + " before", m in reminds) {
                 if (!reminds.remove(m)) reminds.add(m)
             }
         }
-        val custom = chip("+ Custom", false)
-        custom.setOnClickListener { customReminder() }
-        remindRow.addView(custom)
+        val customRemind = chip("+ Custom", false)
+        customRemind.setOnClickListener { customReminder() }
+        remindRow.addView(customRemind)
 
         val repeatRow = findViewById<FlowLayout>(R.id.repeat_chips)
         repeatRow.removeAllViews()
