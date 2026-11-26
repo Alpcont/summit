@@ -23,6 +23,10 @@ Forrest Chang's karpathy-guidelines (MIT); project setup taken from Alpcont/walk
 - No accounts, servers, analytics, ads or INTERNET permission unless I ask. Data stays on
   the phone (SharedPreferences for settings; a database only if truly needed).
 - Fewer files is better. A small app can be 2–4 Kotlin files.
+- Summit only: sync between phone and tablet (Firebase, Sync.kt) is wanted. Every feature
+  that stores data (tasks, habits, notes, courses, exams and anything new) must sync between
+  devices by default, unless I say otherwise for that feature. Settings that are about one
+  device (theme, nudge times) stay on the device.
 
 ## 3. Surgical changes
 - When changing an existing app, touch only what the request needs. Don't reformat, rename
