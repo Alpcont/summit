@@ -57,13 +57,18 @@ class SettingsActivity : Activity() {
         val p = prefs(this)
 
         label("Appearance")
-        val light = Look.isLight(this)
-        row("Theme", if (light) "Light" else "Dark", getColor(R.color.accent)) {
-            p.edit().putString("theme", if (light) "dark" else "light").apply()
+        val theme = Look.theme(this)
+        row("Theme", theme.replaceFirstChar { it.uppercase() }, getColor(R.color.accent)) {
+            val next = when (theme) {
+                "dark" -> "grey"
+                "grey" -> "light"
+                else -> "dark"
+            }
+            p.edit().putString("theme", next).apply()
             TodayWidget.refresh(this)    // the widgets follow the theme too
             recreate()
         }
-        note("Chosen on each device. Tap to switch between dark and light.")
+        note("Chosen on each device. Tap to switch: Dark → Grey → Light.")
 
         label("Morning")
         val nudge = p.getBoolean("nudge", true)

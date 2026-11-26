@@ -60,14 +60,19 @@ open class TodayWidget : AppWidgetProvider() {
             val code = if (important) 20 else 0      // separate request codes, so the two widgets keep their own intents
 
             // Widgets are drawn by the home screen, so the colours are set here from the chosen theme.
-            val light = Look.isLight(ctx)
-            val cPrimary = if (light) 0xFF1F1A16.toInt() else 0xFFF2F3F5.toInt()
-            val cSecondary = if (light) 0xFF6B6159.toInt() else 0xFF9096A0.toInt()
-            val cDim = if (light) 0xFFA0968C.toInt() else 0xFF5C616B.toInt()
+            val theme = Look.theme(ctx)
+            val light = theme == "light"
+            val grey = theme == "grey"
+            val cPrimary = if (light) 0xFF1F1A16.toInt() else if (grey) 0xFFECEDEF.toInt() else 0xFFF2F3F5.toInt()
+            val cSecondary = if (light) 0xFF6B6159.toInt() else if (grey) 0xFFA3A9B2.toInt() else 0xFF9096A0.toInt()
+            val cDim = if (light) 0xFFA0968C.toInt() else if (grey) 0xFF7A808A.toInt() else 0xFF5C616B.toInt()
             val cDanger = if (light) 0xFFD9443F.toInt() else 0xFFFF6B6B.toInt()
 
             val v = RemoteViews(ctx.packageName, R.layout.widget_today)
-            v.setInt(R.id.w_root, "setBackgroundResource", if (light) R.drawable.widget_bg_light else R.drawable.widget_bg)
+            v.setInt(
+                R.id.w_root, "setBackgroundResource",
+                if (light) R.drawable.widget_bg_light else if (grey) R.drawable.widget_bg_grey else R.drawable.widget_bg
+            )
             v.setTextViewText(R.id.w_day, if (important) "Important" else weekdayName(today))
             v.setTextColor(R.id.w_day, cPrimary)
             v.setTextColor(R.id.w_score, cSecondary)

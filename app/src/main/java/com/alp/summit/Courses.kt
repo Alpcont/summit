@@ -91,8 +91,9 @@ object Courses {
             val taken = busy ?: busyTimes(ctx, d).also { busy = it }
             val now = LocalTime.now()
             val earliest = if (d == today) maxOf(DAY_FROM, (now.hour * 60 + now.minute + 14) / 15 * 15) else DAY_FROM
-            val slot = freeSlot(taken, earliest, DAY_TO, STUDY_MINUTES) ?: continue
-            taken.add(Pair(slot, slot + STUDY_MINUTES))
+            // No free hour between 09:00 and 21:00: still suggest it, without a time.
+            val slot = freeSlot(taken, earliest, DAY_TO, STUDY_MINUTES) ?: -1
+            if (slot >= 0) taken.add(Pair(slot, slot + STUDY_MINUTES))
             val examName = e.title.ifBlank { "exam" }
             out.add(
                 Suggestion(

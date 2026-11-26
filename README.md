@@ -53,8 +53,8 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
 - **Widgets**: hold an empty spot on the home screen → Widgets → Summit. "Summit: today" lists
   all of today's tasks; "Summit: important" is smaller and lists only High and Medium tasks
   (scrolls if they do not fit). Tap a task to tick it, tap + to add.
-- **Theme**: Settings → Theme switches between Dark (default) and Light, per device. All screens
-  and both widgets follow it.
+- **Theme**: Settings → Theme switches Dark (default) → Grey (a softer charcoal) → Light, per
+  device. All screens and both widgets follow it.
 - **Chains** (don't break the chain): add habits with the weekdays they are planned for. Tick
   today or yesterday; a link snaps onto the chain, the streak counts up, and the chain glows
   warmer the longer it gets. Days a habit is not planned never break it. Badges with a
@@ -63,15 +63,16 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
   planned for today is not ticked yet (Settings → Chains, default 21:00).
 - **Notes**: switch between Productivity and Developer at the top; the search field looks
   through all notes. Productivity notes can have a checklist and be pinned to a day (then they
-  show in that day's Day view and in the evening planning before it). Developer notes are about
+  show on that day on the Today page, in Calendar → Day, and in the evening planning before it). Developer notes are about
   Summit itself, with a type (Bug, Idea, Change) and status (Open, Done). **Copy for Claude**
   turns all open developer notes into one prompt (grouped by type, with the app version) on the
   clipboard; mark notes Done once an update has them.
 - **Courses** (cap icon on Today): Summit finds course codes like "ECON 101" in the phone
   calendar (Settings → Show calendar events must be on). Add each one with a colour, or mark it
-  "Not a course". Add exam dates to a course; Today shows a countdown, and the Day view suggests
-  a 1-hour study block on each of the 5 days before an exam (in a free gap between 09:00 and
-  21:00). Accept or Skip each with one tap; accepted ones become normal tasks.
+  "Not a course". Add exam dates to a course; Today shows a countdown, and on each of the 5 days
+  before an exam the Today page and Calendar → Day suggest a 1-hour study block (in a free gap
+  between 09:00 and 21:00, or without a time if there is none). Accept or Skip each with one
+  tap; accepted ones become normal tasks.
 - **Assignments** (Courses → New assignment): name, course, deadline, total effort, number of
   sessions and the days to work on it. Summit spreads the sessions evenly over those days as
   normal tasks, which you can change afterwards like any task.

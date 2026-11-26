@@ -43,7 +43,7 @@ import kotlin.math.min
 class MainActivity : Activity() {
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(Look.wrap(newBase))
-        lightApplied = Look.light
+        themeApplied = Look.current
     }
 
     private companion object {
@@ -70,7 +70,7 @@ class MainActivity : Activity() {
     private var tab = 0                              // 0 Today, 1 Calendar, 2 Chains, 3 Notes, 4 Someday
     private var today: LocalDate = LocalDate.now()
     private var shown: LocalDate = LocalDate.now()      // the day on the Today page (swipe to change it)
-    private var lightApplied = false                 // the theme this screen was built with
+    private var themeApplied = ""                    // the theme this screen was built with
     private var swipeX = 0f                          // where a finger went down, for swiping between days
     private var swipeY = 0f
     private var swipeOk = false
@@ -219,7 +219,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         // The theme was switched in Settings: build the screen again in the new colours.
-        if (Look.isLight(this) != lightApplied) {
+        if (Look.theme(this) != themeApplied) {
             recreate()
             return
         }
@@ -535,6 +535,9 @@ class MainActivity : Activity() {
         }
 
         addEvents(day)
+        // Notes pinned to this day, and study blocks suggested before an exam (also in Calendar → Day).
+        for (n in Store.notes.items.filter { !it.developer && it.pin == day }) list.addView(noteCard(n, today))
+        for (sg in Courses.studyBlocks(this, day, today)) list.addView(suggestionCard(sg))
         val visible = all.filter { filter.isEmpty() || it.categoryId == filter }
         if (visible.isEmpty()) list.addView(emptyText(if (isToday) "A clear day.\nAdd your first task below." else "Nothing planned for this day."))
         for (t in visible) list.addView(taskRow(t, day))
@@ -726,7 +729,7 @@ class MainActivity : Activity() {
         addEvents(d, true)
 
         // Notes pinned to this day, and study blocks Summit suggests before an exam.
-        for (n in Store.notes.items.filter { !it.developer && it.pin == d }) list.addView(noteCard(n, today, false))
+        for (n in Store.notes.items.filter { !it.developer && it.pin == d }) list.addView(noteCard(n, today))
         for (sg in Courses.studyBlocks(this, d, today)) list.addView(suggestionCard(sg))
 
         // Tasks without a time: a row on top. Hold one and drag it into the day to give it a time.
@@ -924,7 +927,8 @@ class MainActivity : Activity() {
         lp.topMargin = dp(10)
         card.layoutParams = lp
         val title = TextView(this)
-        title.text = "Suggested: " + sg.title + "  ·  " + fmtTime(sg.time) + " – " + fmtTime(sg.time + sg.duration)
+        title.text = "Suggested: " + sg.title + "  ·  " +
+            (if (sg.time >= 0) fmtTime(sg.time) + " – " + fmtTime(sg.time + sg.duration) else fmtDuration(sg.duration) + ", no free hour 09–21")
         title.textSize = 15f
         title.setTextColor(getColor(R.color.text_primary))
         card.addView(title)

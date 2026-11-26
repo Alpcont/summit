@@ -41,21 +41,36 @@ import kotlin.math.min
 // ---------- Light or dark ----------
 
 /**
- * The theme is chosen in Settings on each device (dark is the default) and is not synced.
- * Every screen passes its context through `wrap`, which picks the light or dark colours and styles
- * (values/ and values-night/). Widgets cannot be wrapped, so they ask `isLight` and colour themselves.
+ * The theme is chosen in Settings on each device (dark is the default) and is not synced:
+ * "dark", "grey" (a softer charcoal shade of dark) or "light".
+ * Every screen passes its context through `wrap`, which picks the colours and styles:
+ * values/ = light, values-night/ = dark, values-desk-night/ = grey. Grey borrows the "desk" screen
+ * type only to reach its own colour file; the other themes set the normal type, so a Samsung DeX
+ * screen does not turn dark into grey. Widgets cannot be wrapped, so they ask `theme` and colour themselves.
  */
 object Look {
     var light = false
         private set
+    var current = "dark"
+        private set
 
-    fun isLight(ctx: Context): Boolean = prefs(ctx).getString("theme", "dark") == "light"
+    fun theme(ctx: Context): String = when (prefs(ctx).getString("theme", "dark")) {
+        "light" -> "light"
+        "grey" -> "grey"
+        else -> "dark"
+    }
+
+    fun isLight(ctx: Context): Boolean = theme(ctx) == "light"
 
     fun wrap(base: Context): Context {
-        light = isLight(base)
+        current = theme(base)
+        light = current == "light"
         val c = android.content.res.Configuration()
-        c.uiMode = if (light) android.content.res.Configuration.UI_MODE_NIGHT_NO
-        else android.content.res.Configuration.UI_MODE_NIGHT_YES
+        c.uiMode = when (current) {
+            "light" -> android.content.res.Configuration.UI_MODE_TYPE_NORMAL or android.content.res.Configuration.UI_MODE_NIGHT_NO
+            "grey" -> android.content.res.Configuration.UI_MODE_TYPE_DESK or android.content.res.Configuration.UI_MODE_NIGHT_YES
+            else -> android.content.res.Configuration.UI_MODE_TYPE_NORMAL or android.content.res.Configuration.UI_MODE_NIGHT_YES
+        }
         return base.createConfigurationContext(c)
     }
 
