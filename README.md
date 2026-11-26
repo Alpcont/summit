@@ -41,6 +41,8 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
   (minutes worked out of minutes planned; a ticked task counts in full). "Finish" ticks the
   task and the timer moves to the next one. The button pauses in between. When a task has
   used its planned time, you get a notification and the numbers turn red.
+- **Reminders**: a task with a time can have several reminders at once (at the time, 10 min,
+  30 min, 1 hour, 1 day before) plus "+ Custom" for any number of minutes, hours or days before.
 - **Duration**: in the task form, pick a preset or "Custom" for any hours and minutes.
 - **Someday**: tasks without a date.
 - **Morning review**: opens once a day (from 08:00, changeable) when earlier tasks are still

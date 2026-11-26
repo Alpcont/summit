@@ -886,15 +886,19 @@ class PagerView(ctx: Context) : HorizontalScrollView(ctx) {
         post { scrollTo(index * width, 0) }
     }
 
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
-        if (w == oldw) return
-        for (i in 0 until row.childCount) {
+    /** Every page is exactly as wide as the pager; set before measuring, so the cards are never 0 wide. */
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val w = MeasureSpec.getSize(widthMeasureSpec)
+        if (w > 0) for (i in 0 until row.childCount) {
             val lp = row.getChildAt(i).layoutParams as LinearLayout.LayoutParams
             lp.width = w - lp.marginStart - lp.marginEnd
-            row.getChildAt(i).layoutParams = lp
         }
-        post { scrollTo(current * w, 0) }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (w != oldw) post { scrollTo(current * w, 0) }
     }
 
     override fun fling(velocityX: Int) {

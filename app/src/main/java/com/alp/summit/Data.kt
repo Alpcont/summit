@@ -28,6 +28,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
     var repeatMask = 0                 // bit 0 = Monday ... bit 6 = Sunday, 0 = does not repeat
     var endDate: LocalDate? = null     // last day of a repeating task, null = no end
     var remind = 0                     // minutes before `time` to notify, -1 = no reminder
+    val moreReminds = ArrayList<Int>()  // further reminders (minutes before), besides `remind`
     var done = false                   // tick state of a non-repeating task
     val doneDates = HashSet<String>()  // repeating task: the days it was ticked
     val skipDates = HashSet<String>()  // repeating task: days removed from the series
@@ -44,6 +45,9 @@ class Task(val id: String = UUID.randomUUID().toString()) {
     var syncHash = 0                   // fingerprint of the content last exchanged with the cloud; 0 = never
 
     val repeating: Boolean get() = repeatMask != 0 && date != null
+
+    /** Every reminder of this task, as minutes before its time, earliest reminder first. */
+    fun reminders(): List<Int> = if (remind < 0) emptyList() else (listOf(remind) + moreReminds).distinct().sortedDescending()
 
     fun occursOn(d: LocalDate): Boolean {
         val start = date ?: return false
@@ -70,6 +74,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
         priority = o.priority; categoryId = o.categoryId; repeatMask = o.repeatMask; endDate = o.endDate
         remind = o.remind; done = o.done; rank = o.rank; spent = o.spent; created = o.created; updated = o.updated
         origin = o.origin; moves = o.moves; habitId = o.habitId
+        moreReminds.clear(); moreReminds.addAll(o.moreReminds)
         doneDates.clear(); doneDates.addAll(o.doneDates)
         skipDates.clear(); skipDates.addAll(o.skipDates)
         subDone.clear(); subDone.addAll(o.subDone)
@@ -82,6 +87,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
         val c = Task()
         c.title = title; c.notes = notes; c.date = d; c.time = time; c.duration = duration
         c.priority = priority; c.categoryId = categoryId; c.remind = remind; c.habitId = habitId
+        c.moreReminds.addAll(moreReminds)
         for (s in subtasks) c.subtasks.add(Subtask(UUID.randomUUID().toString(), s.title))
         return c
     }
@@ -206,6 +212,7 @@ object Store {
         if (t.origin.isNotEmpty()) o.put("origin", t.origin)
         if (t.moves > 0) o.put("moves", t.moves)
         if (t.habitId.isNotEmpty()) o.put("habit", t.habitId)
+        if (t.moreReminds.isNotEmpty()) o.put("moreReminds", JSONArray(t.moreReminds))
         return o
     }
 
@@ -255,6 +262,7 @@ object Store {
         t.origin = j.optString("origin")
         t.moves = j.optInt("moves", 0)
         t.habitId = j.optString("habit")
+        j.optJSONArray("moreReminds")?.let { a -> for (k in 0 until a.length()) t.moreReminds.add(a.optInt(k)) }
         return t
     }
 
@@ -948,6 +956,18 @@ fun fmtDuration(m: Int): String = when {
     m < 60 -> "${m}m"
     m % 60 == 0 -> "${m / 60}h"
     else -> "${m / 60}h ${m % 60}m"
+}
+
+/** "45 min", "1 hour", "2 hours", "1 day", "1 day 3 hours" (for reminders before a task). */
+fun beforeLabel(m: Int): String {
+    val days = m / (24 * 60)
+    val hours = m % (24 * 60) / 60
+    val mins = m % 60
+    val parts = ArrayList<String>()
+    if (days > 0) parts.add(plural(days, "day"))
+    if (hours > 0) parts.add(plural(hours, "hour"))
+    if (mins > 0) parts.add("$mins min")
+    return parts.joinToString(" ")
 }
 
 fun plural(n: Int, word: String): String = if (n == 1) "$n $word" else "$n ${word}s"

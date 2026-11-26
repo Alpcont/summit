@@ -35,7 +35,7 @@ class EditTaskActivity : Activity() {
     // Working copy of the fields.
     private var date: LocalDate? = null
     private var time = -1
-    private var remind = 0
+    private val reminds = java.util.TreeSet<Int>()   // minutes before; empty = no reminder
     private var mask = 0
     private var duration = 0
     private var priority = 2
@@ -65,7 +65,7 @@ class EditTaskActivity : Activity() {
             occurrence = day
             date = t.date
             time = t.time
-            remind = t.remind
+            reminds.addAll(t.reminders())
             mask = t.repeatMask
             duration = t.duration
             priority = t.priority
@@ -77,6 +77,7 @@ class EditTaskActivity : Activity() {
         } else {
             date = day
             time = intent.getIntExtra("time", -1)
+            reminds.add(0)   // a new task reminds at its time, as before
             category = intent.getStringExtra("category") ?: ""
             titleInput.setText(intent.getStringExtra("title") ?: "")
             titleInput.setSelection(titleInput.text.length)
@@ -137,11 +138,17 @@ class EditTaskActivity : Activity() {
         val showRemind = time >= 0 && date != null
         findViewById<View>(R.id.label_remind).visibility = if (showRemind) View.VISIBLE else View.GONE
         remindRow.visibility = if (showRemind) View.VISIBLE else View.GONE
-        add(remindRow, "Off", remind == -1) { remind = -1 }
-        add(remindRow, "At the time", remind == 0) { remind = 0 }
-        add(remindRow, "10 min before", remind == 10) { remind = 10 }
-        add(remindRow, "30 min before", remind == 30) { remind = 30 }
-        add(remindRow, "1 hour before", remind == 60) { remind = 60 }
+        // Several can be on at once; "Custom" adds any amount before.
+        add(remindRow, "Off", reminds.isEmpty()) { reminds.clear() }
+        val presets = listOf(0, 10, 30, 60, 24 * 60)
+        for (m in (presets + reminds).distinct().sorted()) {
+            add(remindRow, if (m == 0) "At the time" else beforeLabel(m) + " before", m in reminds) {
+                if (!reminds.remove(m)) reminds.add(m)
+            }
+        }
+        val custom = chip("+ Custom", false)
+        custom.setOnClickListener { customReminder() }
+        remindRow.addView(custom)
 
         val repeatRow = findViewById<FlowLayout>(R.id.repeat_chips)
         repeatRow.removeAllViews()
@@ -290,6 +297,48 @@ class EditTaskActivity : Activity() {
         render()
     }
 
+    /** A reminder at any amount before: a number and minutes, hours or days. */
+    private fun customReminder() {
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding(dp(24), dp(8), dp(24), 0)
+        val number = EditText(this)
+        number.hint = "How many"
+        number.inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        number.setText("45")
+        number.setSelection(number.text.length)
+        box.addView(number)
+        val units = FlowLayout(this)
+        units.setPadding(0, dp(12), 0, 0)
+        box.addView(units)
+        var unit = 1
+        fun paint() {
+            units.removeAllViews()
+            for ((label, factor) in listOf("minutes" to 1, "hours" to 60, "days" to 24 * 60)) {
+                val c = chip("$label before", unit == factor)
+                c.setOnClickListener {
+                    unit = factor
+                    paint()
+                }
+                units.addView(c)
+            }
+        }
+        paint()
+        AlertDialog.Builder(this)
+            .setTitle("Custom reminder")
+            .setView(box)
+            .setPositiveButton("Add") { _, _ ->
+                val n = number.text.toString().toIntOrNull() ?: return@setPositiveButton
+                val m = n * unit
+                if (m in 0..(14 * 24 * 60)) {
+                    reminds.add(m)
+                    render()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     // ---------- Save and delete ----------
 
     private fun save() {
@@ -305,7 +354,9 @@ class EditTaskActivity : Activity() {
         t.notes = notesInput.text.toString().trim()
         t.date = date
         t.time = time
-        t.remind = remind
+        t.remind = reminds.firstOrNull() ?: -1
+        t.moreReminds.clear()
+        t.moreReminds.addAll(reminds.drop(1))
         t.repeatMask = if (date == null) 0 else mask
         if (!t.repeating) t.endDate = null
         t.duration = duration

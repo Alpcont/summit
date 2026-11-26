@@ -285,9 +285,9 @@ class NotesPage(private val a: Activity, private val rerender: () -> Unit) {
         val copyBar = LinearLayout(a)
         copyBar.orientation = LinearLayout.HORIZONTAL
         copyBar.gravity = Gravity.CENTER_VERTICAL
-        // Inverted colours: dark on the light theme, light on the dark ones.
-        val barBg = if (light) 0xFF1A1714.toInt() else c(R.color.text_primary)
-        val barFg = if (light) 0xFFFAF7F2.toInt() else c(R.color.bg)
+        // Dark ink on the light theme; on Dark and Grey a warm, slightly orange-tinted surface.
+        val barBg = if (light) 0xFF1A1714.toInt() else mix(c(R.color.surface), c(R.color.accent), 0.16f)
+        val barFg = if (light) 0xFFFAF7F2.toInt() else c(R.color.text_primary)
         copyBar.background = rounded(barBg, dp(18))
         copyBar.setPadding(dp(16), dp(14), dp(14), dp(14))
         val words = LinearLayout(a)

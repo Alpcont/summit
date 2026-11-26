@@ -63,9 +63,12 @@ object Reminders {
             }
             for (t in Store.tasks) {
                 if (t.time < 0 || t.remind < 0 || !t.occursOn(d) || t.isDone(d)) continue
-                val a = millis(d, t.time) - t.remind * 60_000L
-                // a > t.updated: a task edited after its reminder moment does not notify late.
-                if (a > from && a <= to && a > t.updated) out.add(Event(a, t, d, TASK))
+                // A task can have several reminders; each one notifies.
+                for (before in t.reminders()) {
+                    val a = millis(d, t.time) - before * 60_000L
+                    // a > t.updated: a task edited after its reminder moment does not notify late.
+                    if (a > from && a <= to && a > t.updated) out.add(Event(a, t, d, TASK, before))
+                }
             }
             d = d.plusDays(1)
         }
@@ -320,6 +323,7 @@ object Reminders {
         val done = Intent(ctx, AlarmReceiver::class.java).setAction(ACTION_DONE)
             .putExtra("task", t.id).putExtra("date", e.date.toString()).putExtra("nid", id)
         val parts = ArrayList<String>()
+        if (e.minutes > 0) parts.add("in " + beforeLabel(e.minutes))
         parts.add(fmtTime(t.time))
         if (t.duration > 0) parts.add(fmtDuration(t.duration))
         Store.category(t.categoryId)?.let { parts.add(it.name) }
