@@ -4,6 +4,9 @@
     <string name="tab_today">Today</string>
     <string name="tab_calendar">Calendar</string>
     <string name="tab_someday">Someday</string>
+    <string name="tab_chains">Chains</string>
+    <string name="tab_notes">Notes</string>
+    <string name="courses">Courses</string>
     <string name="settings">Settings</string>
     <string name="add_task">Add task</string>
     <string name="more_details">Add with details</string>
@@ -14,6 +17,8 @@
     <string name="undo">Undo</string>
     <string name="progress">Progress</string>
     <string name="widget_label">Summit: today</string>
+    <string name="widget_small_label">Summit: important</string>
+    <string name="widget_small_description">Today\'s High and Medium priority tasks. Tap one to tick it.</string>
     <string name="widget_description">Today\'s tasks. Tap a task to tick it.</string>
     <string name="month">Month</string>
     <string name="week">Week</string>

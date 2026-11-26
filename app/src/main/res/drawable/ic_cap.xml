@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Graduation cap: opens Courses. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path android:pathData="M2.5,9.5 L12,5 L21.5,9.5 L12,14 Z" android:strokeColor="#FFFFFF" android:strokeWidth="1.8" android:strokeLineJoin="round" />
+    <path android:pathData="M6.5,11.5 v4.5 c3,2.4 8,2.4 11,0 v-4.5" android:strokeColor="#FFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M21.5,9.5 v5" android:strokeColor="#FFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" />
+</vector>

@@ -1,6 +1,7 @@
 package com.alp.summit
 
 import android.app.Activity
+import android.content.Context
 import android.app.DatePickerDialog
 import android.os.Bundle
 import android.view.KeyEvent
@@ -16,6 +17,10 @@ import java.util.Calendar
  * do it today, move it to another day, or drop it.
  */
 class ReviewActivity : Activity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(Look.wrap(newBase))
+    }
+
     private class Choice(val missed: Missed) {
         var action = 0                 // 0 today, 1 another day, 2 drop
         var date: LocalDate? = null    // the day picked for "another day"

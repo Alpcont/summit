@@ -39,6 +39,12 @@
         </LinearLayout>
 
         <ImageButton
+            android:id="@+id/btn_courses"
+            style="@style/IconButton"
+            android:contentDescription="@string/courses"
+            android:src="@drawable/ic_cap" />
+
+        <ImageButton
             android:id="@+id/btn_stats"
             style="@style/IconButton"
             android:contentDescription="@string/progress"
@@ -50,6 +56,22 @@
             android:contentDescription="@string/settings"
             android:src="@drawable/ic_settings" />
     </LinearLayout>
+
+    <!-- "Back to today" on other days, and the countdown to upcoming exams. -->
+    <HorizontalScrollView
+        android:id="@+id/today_chips_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:scrollbars="none"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:id="@+id/today_chips"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal" />
+    </HorizontalScrollView>
 
     <com.alp.summit.SummitView
         android:id="@+id/summit"

@@ -38,6 +38,39 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
+// ---------- Light or dark ----------
+
+/**
+ * The theme is chosen in Settings on each device (dark is the default) and is not synced.
+ * Every screen passes its context through `wrap`, which picks the light or dark colours and styles
+ * (values/ and values-night/). Widgets cannot be wrapped, so they ask `isLight` and colour themselves.
+ */
+object Look {
+    var light = false
+        private set
+
+    fun isLight(ctx: Context): Boolean = prefs(ctx).getString("theme", "dark") == "light"
+
+    fun wrap(base: Context): Context {
+        light = isLight(base)
+        val c = android.content.res.Configuration()
+        c.uiMode = if (light) android.content.res.Configuration.UI_MODE_NIGHT_NO
+        else android.content.res.Configuration.UI_MODE_NIGHT_YES
+        return base.createConfigurationContext(c)
+    }
+
+    /** Category and course colours: a little deeper on the light background so text stays readable. */
+    fun tone(color: Int): Int = if (!light) color else deeper(color)
+
+    fun deeper(color: Int): Int {
+        val hsv = FloatArray(3)
+        android.graphics.Color.colorToHSV(color, hsv)
+        hsv[1] = min(1f, hsv[1] * 1.12f)
+        hsv[2] = hsv[2] * 0.74f
+        return android.graphics.Color.HSVToColor(android.graphics.Color.alpha(color), hsv)
+    }
+}
+
 // ---------- Small UI helpers ----------
 
 fun Context.dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
@@ -545,7 +578,9 @@ class CelebrationView(ctx: Context, private val count: Int) : View(ctx) {
     private val sparks = ArrayList<Spark>()
 
     init {
-        val colors = intArrayOf(accent, -1, 0xFFF5C451.toInt(), 0xFF5B9DFF.toInt(), 0xFF3DDC97.toInt(), 0xFFF283B6.toInt())
+        val colors = intArrayOf(
+            accent, ctx.getColor(R.color.text_primary), 0xFFF5C451.toInt(), 0xFF5B9DFF.toInt(), 0xFF3DDC97.toInt(), 0xFFF283B6.toInt()
+        )
         val rnd = java.util.Random(11)
         for (i in 0 until 46) {
             val angle = Math.PI * (1.05 + 0.9 * rnd.nextDouble())      // upwards, fanned out
@@ -950,8 +985,8 @@ class DayTimelineView(ctx: Context) : View(ctx) {
         val e = b.event
         val done = t != null && t.isDone(day)
         val color = when {
-            t != null -> Store.category(t.categoryId)?.color ?: accent
-            e != null -> e.color
+            t != null -> Store.colorOf(t) ?: accent
+            e != null -> Look.tone(e.color)
             else -> accent
         }
         val radius = 9f * d

@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+    <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:colorBackground">@color/bg</item>
         <item name="android:statusBarColor">@color/bg</item>
         <item name="android:navigationBarColor">@color/bg</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
         <item name="android:colorAccent">@color/accent</item>
         <item name="android:colorControlActivated">@color/accent</item>
         <item name="android:textColorPrimary">@color/text_primary</item>
@@ -16,7 +16,7 @@
     </style>
 
     <!-- Pop-ups: confirmations, date picker, time picker. -->
-    <style name="AppDialog" parent="@android:style/Theme.Material.Dialog.Alert">
+    <style name="AppDialog" parent="@android:style/Theme.Material.Light.Dialog.Alert">
         <item name="android:colorAccent">@color/accent</item>
         <item name="android:colorControlActivated">@color/accent</item>
         <item name="android:colorBackground">@color/surface2</item>

@@ -60,4 +60,24 @@ object PhoneCalendar {
         }
         return out.sortedWith(compareBy({ !it.allDay }, { it.start }))
     }
+
+    /** The titles of all events between two days (both included), for finding course codes. */
+    fun titles(ctx: Context, from: LocalDate, to: LocalDate): List<String> {
+        if (!enabled(ctx)) return emptyList()
+        val out = ArrayList<String>()
+        try {
+            val zone = ZoneId.systemDefault()
+            val uri = CalendarContract.Instances.CONTENT_URI.buildUpon()
+                .let { ContentUris.appendId(it, from.atStartOfDay(zone).toInstant().toEpochMilli()) }
+                .let { ContentUris.appendId(it, to.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()) }.build()
+            ctx.contentResolver.query(
+                uri, arrayOf(CalendarContract.Instances.TITLE), CalendarContract.Instances.VISIBLE + " = 1", null, null
+            )?.use { c ->
+                while (c.moveToNext()) c.getString(0)?.takeIf { it.isNotBlank() }?.let { out.add(it) }
+            }
+        } catch (e: Exception) {
+            // No calendar, or no permission: nothing found.
+        }
+        return out
+    }
 }

@@ -36,6 +36,8 @@ class Task(val id: String = UUID.randomUUID().toString()) {
     var rank = -1.0                    // position after dragging; below 0 = automatic order
     var spent = 0                      // minutes of work logged on this task, all days together
     val spentDay = HashMap<String, Int>()  // the same minutes per day (a repeating task starts fresh every day)
+    var origin = ""                    // made by Summit for something: "study|course|exam|day", "asg|id", "review|course|day"
+    var moves = 0                      // how often it was moved to another day (for the weekly review)
     var created = System.currentTimeMillis()
     var updated = created
     var syncHash = 0                   // fingerprint of the content last exchanged with the cloud; 0 = never
@@ -66,6 +68,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
         title = o.title; notes = o.notes; date = o.date; time = o.time; duration = o.duration
         priority = o.priority; categoryId = o.categoryId; repeatMask = o.repeatMask; endDate = o.endDate
         remind = o.remind; done = o.done; rank = o.rank; spent = o.spent; created = o.created; updated = o.updated
+        origin = o.origin; moves = o.moves
         doneDates.clear(); doneDates.addAll(o.doneDates)
         skipDates.clear(); skipDates.addAll(o.skipDates)
         subDone.clear(); subDone.addAll(o.subDone)
@@ -92,6 +95,12 @@ object Store {
     val tasks = ArrayList<Task>()
     val categories = ArrayList<Category>()
     val focusLog = HashMap<String, Int>()   // day -> minutes of focus time
+    val habits = Shelf("habits") { Habit.from(it) }
+    val notes = Shelf("notes") { Note.from(it) }
+    val courses = Shelf("courses") { Course.from(it) }
+    val assignments = Shelf("assignments") { Assignment.from(it) }
+    /** Everything besides tasks that is kept on the device and synced the same way. */
+    val shelves: List<Shelf<*>> = listOf(habits, notes, courses, assignments)
 
     // Bookkeeping for sync between devices (see Sync.kt).
     val syncedIds = HashSet<String>()       // tasks the cloud knows about; one missing here was deleted
@@ -130,6 +139,7 @@ object Store {
             tasks.clear()
             categories.clear()
             focusLog.clear()
+            for (sh in shelves) sh.clear()
             seed()
         }
     }
@@ -160,6 +170,7 @@ object Store {
         val fs = JSONObject()
         for ((day, minutes) in focusLog) fs.put(day, minutes)
         o.put("focus", fs)
+        for (sh in shelves) sh.write(o)
         val text = o.toString()
         val tmp = File(f.parentFile, f.name + ".tmp")
         tmp.writeText(text)
@@ -190,6 +201,9 @@ object Store {
         for ((day, minutes) in t.spentDay.toSortedMap()) sd.put(day, minutes)
         o.put("spentDay", sd)
         o.put("created", t.created).put("updated", t.updated)
+        // Newer fields are only written when used, so older tasks keep the same fingerprint.
+        if (t.origin.isNotEmpty()) o.put("origin", t.origin)
+        if (t.moves > 0) o.put("moves", t.moves)
         return o
     }
 
@@ -206,6 +220,7 @@ object Store {
         catsUpdated = o.optLong("catsUpdated", 0L)
         catsSyncHash = o.optInt("catsSyncHash", 0)
         focusSyncHash = o.optInt("focusSyncHash", 0)
+        for (sh in shelves) sh.read(o)
     }
 
     fun taskFromJson(j: JSONObject): Task {
@@ -235,6 +250,8 @@ object Store {
         t.created = j.optLong("created", System.currentTimeMillis())
         t.updated = j.optLong("updated", t.created)
         t.syncHash = j.optInt("syncHash", 0)
+        t.origin = j.optString("origin")
+        t.moves = j.optInt("moves", 0)
         return t
     }
 
@@ -253,6 +270,21 @@ object Store {
     fun task(id: String?): Task? = tasks.firstOrNull { it.id == id }
 
     fun category(id: String): Category? = categories.firstOrNull { it.id == id }
+
+    /** The course a task was made for (a study block, an assignment session or a class review), or null. */
+    fun courseOf(t: Task): Course? {
+        if (t.origin.isEmpty()) return null
+        val p = t.origin.split('|')
+        val c = when (p[0]) {
+            "study", "review" -> courses.get(p.getOrNull(1))
+            "asg" -> courses.get(assignments.get(p.getOrNull(1))?.courseId)
+            else -> null
+        }
+        return c?.takeIf { !it.hidden }
+    }
+
+    /** The colour a task is shown in: its course's, else its category's (deeper on the light theme). */
+    fun colorOf(t: Task): Int? = (courseOf(t)?.color ?: category(t.categoryId)?.color)?.let { Look.tone(it) }
 
     /** Tasks of one day. Open tasks first (hand-placed, then by time and priority), ticked ones below. */
     fun on(d: LocalDate): List<Task> =
@@ -489,6 +521,7 @@ object Store {
         catsSyncHash = 0
         catsUpdated = 0L
         focusSyncHash = 0
+        for (sh in shelves) sh.resetSync()
     }
 
     // ----- Changes -----
@@ -503,6 +536,7 @@ object Store {
     }
 
     fun move(t: Task, d: LocalDate?) {
+        if (t.date != null && d != t.date) t.moves++
         t.date = d
         t.rank = -1.0
         if (d == null) {
@@ -510,6 +544,308 @@ object Store {
             t.endDate = null
         }
         t.updated = System.currentTimeMillis()
+    }
+}
+
+// ---------- Habits, notes, courses and assignments ----------
+
+/** Something besides a task that is stored on the device and synced between devices. */
+abstract class Synced(val id: String) {
+    var updated = System.currentTimeMillis()
+    var syncHash = 0       // fingerprint of the content last exchanged with the cloud; 0 = never
+
+    /** Everything about it, as stored on the device and in the cloud ("id" and "updated" included). */
+    abstract fun json(): JSONObject
+
+    fun hash(): Int {
+        val j = json()
+        j.remove("updated")
+        val h = j.toString().hashCode()
+        return if (h == 0) 1 else h
+    }
+
+    /** Call after every change, so the later change wins when both devices changed it. */
+    fun touch() {
+        updated = System.currentTimeMillis()
+    }
+}
+
+/** One list of synced things, with the bookkeeping sync needs. Stored in the app's file under `name`. */
+class Shelf<T : Synced>(val name: String, private val make: (JSONObject) -> T) : Iterable<T> {
+    val items = ArrayList<T>()
+    val syncedIds = HashSet<String>()   // ids the cloud knows; one missing from `items` was deleted here
+
+    override fun iterator(): Iterator<T> = items.iterator()
+    fun get(id: String?): T? = items.firstOrNull { it.id == id }
+    fun add(item: T) = items.add(item)
+    fun remove(item: T) = items.remove(item)
+    fun clear() = items.clear()
+
+    fun write(o: JSONObject) {
+        val a = JSONArray()
+        for (it in items) a.put(it.json().put("syncHash", it.syncHash))
+        o.put(name, a)
+        o.put(name + "Synced", JSONArray(syncedIds.toList()))
+    }
+
+    fun read(o: JSONObject) {
+        val a = o.optJSONArray(name) ?: JSONArray()
+        for (i in 0 until a.length()) {
+            try {
+                val j = a.getJSONObject(i)
+                val item = make(j)
+                item.updated = j.optLong("updated", item.updated)
+                item.syncHash = j.optInt("syncHash", 0)
+                items.add(item)
+            } catch (e: Exception) {
+                // One unreadable entry should not take the others with it.
+            }
+        }
+        val ids = o.optJSONArray(name + "Synced") ?: JSONArray()
+        for (i in 0 until ids.length()) syncedIds.add(ids.getString(i))
+    }
+
+    /** Builds an item from what another device saved (also keeps its "updated"). */
+    fun fromRemote(id: String, j: JSONObject): T {
+        j.put("id", id)
+        val item = make(j)
+        item.updated = j.optLong("updated", 0L)
+        return item
+    }
+
+    fun resetSync() {
+        for (it in items) it.syncHash = 0
+        syncedIds.clear()
+    }
+
+    /**
+     * What changed here since the last exchange: (items to send, ids deleted here).
+     * Marks them as exchanged. Works like the tasks do (see Sync.beforeSave).
+     */
+    fun outgoing(now: Long): Pair<List<JSONObject>, List<String>> {
+        val up = ArrayList<JSONObject>()
+        val alive = HashSet<String>()
+        for (it in items) {
+            alive.add(it.id)
+            val h = it.hash()
+            if (h == it.syncHash) continue
+            if (it.syncHash != 0) it.updated = now      // changed since the last exchange
+            it.syncHash = h
+            syncedIds.add(it.id)
+            up.add(it.json().put("deleted", false))
+        }
+        val gone = syncedIds.filter { it !in alive }
+        syncedIds.removeAll(gone.toSet())
+        return Pair(up, gone)
+    }
+
+    /** One item as another device saved it. Returns true if something here changed. Later change wins. */
+    fun applyRemote(id: String, j: JSONObject): Boolean {
+        val local = get(id)
+        val remoteUpdated = j.optLong("updated", 0L)
+        val localClean = local != null && local.syncHash != 0 && local.hash() == local.syncHash
+        if (j.optBoolean("deleted", false)) {
+            syncedIds.remove(id)
+            if (local == null) return false
+            // Changed here after it was deleted elsewhere: the change wins and goes back up.
+            if (!localClean && local.updated > remoteUpdated) {
+                local.syncHash = 0
+                return false
+            }
+            items.remove(local)
+            return true
+        }
+        val remote = fromRemote(id, j)
+        val h = remote.hash()
+        syncedIds.add(id)
+        if (local == null) {
+            remote.syncHash = h
+            items.add(remote)
+            return true
+        }
+        if (local.hash() == h) {
+            local.syncHash = h
+            return false
+        }
+        if (!localClean && local.updated >= remoteUpdated) return false
+        remote.syncHash = h
+        items[items.indexOf(local)] = remote
+        return true
+    }
+}
+
+private fun JSONObject.dateOrNull(key: String): LocalDate? =
+    optString(key).takeIf { it.isNotEmpty() }?.let { try { LocalDate.parse(it) } catch (e: Exception) { null } }
+
+private fun stringSet(a: JSONArray?): HashSet<String> {
+    val out = HashSet<String>()
+    if (a != null) for (i in 0 until a.length()) out.add(a.getString(i))
+    return out
+}
+
+/** A habit for the "Don't break the chain" tab. */
+class Habit(id: String = UUID.randomUUID().toString()) : Synced(id) {
+    var title = ""
+    var mask = 127                       // weekdays it is planned: bit 0 = Monday ... bit 6 = Sunday
+    var marked = false                   // starred, for the "Marked" calendar view
+    var start: LocalDate = LocalDate.now().minusDays(1)   // days before this never break the chain
+    val ticks = HashSet<String>()        // days it was done
+    val badges = HashSet<Int>()          // 7, 30 and 100-day badges already earned
+    var created = System.currentTimeMillis()
+
+    fun planned(d: LocalDate): Boolean = mask and (1 shl (d.dayOfWeek.value - 1)) != 0
+    fun ticked(d: LocalDate): Boolean = d.toString() in ticks
+
+    /** Planned days in a row that were ticked. Unplanned days are skipped; an unticked today does not break it yet. */
+    fun streak(today: LocalDate): Int {
+        var n = 0
+        var d = today
+        while (!d.isBefore(start)) {
+            if (planned(d)) {
+                if (ticked(d)) n++ else if (d != today) break
+            }
+            d = d.minusDays(1)
+        }
+        return n
+    }
+
+    fun best(today: LocalDate): Int {
+        var best = 0
+        var run = 0
+        var d = start
+        while (!d.isAfter(today)) {
+            if (planned(d)) {
+                if (ticked(d)) run++ else if (d != today) run = 0
+                best = maxOf(best, run)
+            }
+            d = d.plusDays(1)
+        }
+        return best
+    }
+
+    override fun json(): JSONObject = JSONObject()
+        .put("id", id).put("title", title).put("mask", mask).put("marked", marked)
+        .put("start", start.toString()).put("ticks", JSONArray(ticks.sorted()))
+        .put("badges", JSONArray(badges.sorted())).put("created", created).put("updated", updated)
+
+    companion object {
+        fun from(j: JSONObject): Habit {
+            val h = Habit(j.getString("id"))
+            h.title = j.optString("title")
+            h.mask = j.optInt("mask", 127)
+            h.marked = j.optBoolean("marked", false)
+            j.dateOrNull("start")?.let { h.start = it }
+            h.ticks.addAll(stringSet(j.optJSONArray("ticks")))
+            val b = j.optJSONArray("badges")
+            if (b != null) for (i in 0 until b.length()) h.badges.add(b.optInt(i))
+            h.created = j.optLong("created", h.created)
+            return h
+        }
+    }
+}
+
+class CheckItem(val id: String, var text: String, var done: Boolean)
+
+/** A note. Productivity notes can be pinned to a day; developer notes are about Summit itself. */
+class Note(id: String = UUID.randomUUID().toString()) : Synced(id) {
+    var developer = false
+    var title = ""
+    var text = ""
+    val items = ArrayList<CheckItem>()   // checklist inside the note
+    var pin: LocalDate? = null           // productivity: shown on this day
+    var type = "idea"                    // developer: "bug", "idea" or "change"
+    var open = true                      // developer: Open or Done
+    var created = System.currentTimeMillis()
+
+    override fun json(): JSONObject {
+        val a = JSONArray()
+        for (c in items) a.put(JSONObject().put("id", c.id).put("text", c.text).put("done", c.done))
+        return JSONObject()
+            .put("id", id).put("developer", developer).put("title", title).put("text", text).put("items", a)
+            .put("pin", pin?.toString() ?: "").put("type", type).put("open", open)
+            .put("created", created).put("updated", updated)
+    }
+
+    companion object {
+        fun from(j: JSONObject): Note {
+            val n = Note(j.getString("id"))
+            n.developer = j.optBoolean("developer", false)
+            n.title = j.optString("title")
+            n.text = j.optString("text")
+            val a = j.optJSONArray("items")
+            if (a != null) for (i in 0 until a.length()) {
+                val c = a.getJSONObject(i)
+                n.items.add(CheckItem(c.optString("id", UUID.randomUUID().toString()), c.optString("text"), c.optBoolean("done")))
+            }
+            n.pin = j.dateOrNull("pin")
+            n.type = j.optString("type", "idea").ifEmpty { "idea" }
+            n.open = j.optBoolean("open", true)
+            n.created = j.optLong("created", n.created)
+            return n
+        }
+    }
+}
+
+class Exam(val id: String, var date: LocalDate, var time: Int, var title: String)
+
+/** A course found in the phone calendar (e.g. "ECON 101"), with its colour and exams. */
+class Course(id: String = UUID.randomUUID().toString()) : Synced(id) {
+    var code = ""                        // "ECON 101"
+    var color = Color.parseColor("#5B9DFF")
+    var hidden = false                   // "not a course": not suggested again
+    val exams = ArrayList<Exam>()
+    val skipped = HashSet<String>()      // suggestions turned down ("study|exam|day", "review|day")
+
+    override fun json(): JSONObject {
+        val a = JSONArray()
+        for (e in exams) a.put(JSONObject().put("id", e.id).put("date", e.date.toString()).put("time", e.time).put("title", e.title))
+        return JSONObject()
+            .put("id", id).put("code", code).put("color", color).put("hidden", hidden).put("exams", a)
+            .put("skipped", JSONArray(skipped.sorted())).put("updated", updated)
+    }
+
+    companion object {
+        fun from(j: JSONObject): Course {
+            val c = Course(j.getString("id"))
+            c.code = j.optString("code")
+            c.color = j.optInt("color", c.color)
+            c.hidden = j.optBoolean("hidden", false)
+            val a = j.optJSONArray("exams")
+            if (a != null) for (i in 0 until a.length()) {
+                val e = a.getJSONObject(i)
+                val d = e.dateOrNull("date") ?: continue
+                c.exams.add(Exam(e.optString("id", UUID.randomUUID().toString()), d, e.optInt("time", -1), e.optString("title")))
+            }
+            c.skipped.addAll(stringSet(j.optJSONArray("skipped")))
+            return c
+        }
+    }
+}
+
+/** An assignment split into work sessions. The sessions are ordinary tasks with origin "asg|<id>". */
+class Assignment(id: String = UUID.randomUUID().toString()) : Synced(id) {
+    var title = ""
+    var courseId = ""
+    var deadline: LocalDate = LocalDate.now().plusDays(7)
+    var effort = 240                     // minutes in total
+    var sessions = 4
+    var created = System.currentTimeMillis()
+
+    override fun json(): JSONObject = JSONObject()
+        .put("id", id).put("title", title).put("course", courseId).put("deadline", deadline.toString())
+        .put("effort", effort).put("sessions", sessions).put("created", created).put("updated", updated)
+
+    companion object {
+        fun from(j: JSONObject): Assignment {
+            val a = Assignment(j.getString("id"))
+            a.title = j.optString("title")
+            a.courseId = j.optString("course")
+            j.dateOrNull("deadline")?.let { a.deadline = it }
+            a.effort = j.optInt("effort", 240)
+            a.sessions = j.optInt("sessions", 4)
+            a.created = j.optLong("created", a.created)
+            return a
+        }
     }
 }
 

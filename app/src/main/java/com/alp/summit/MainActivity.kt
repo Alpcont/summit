@@ -39,8 +39,13 @@ import java.time.YearMonth
 import kotlin.math.abs
 import kotlin.math.min
 
-/** The main screen with its three pages: Today, Calendar and Someday. */
+/** The main screen with its five pages: Today, Calendar, Chains, Notes and Someday. */
 class MainActivity : Activity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(Look.wrap(newBase))
+        lightApplied = Look.light
+    }
+
     private companion object {
         const val NONE = 0
         const val PAGE = 1           // the whole page glides in
@@ -53,7 +58,6 @@ class MainActivity : Activity() {
 
         // What a finger on a task line is doing.
         const val IDLE = 0
-        const val SWIPE = 1
         const val DRAG = 2
     }
 
@@ -63,8 +67,15 @@ class MainActivity : Activity() {
     private lateinit var input: EditText
     private lateinit var tabViews: List<TextView>
 
-    private var tab = 0                              // 0 Today, 1 Calendar, 2 Someday
+    private var tab = 0                              // 0 Today, 1 Calendar, 2 Chains, 3 Notes, 4 Someday
     private var today: LocalDate = LocalDate.now()
+    private var shown: LocalDate = LocalDate.now()      // the day on the Today page (swipe to change it)
+    private var lightApplied = false                 // the theme this screen was built with
+    private var swipeX = 0f                          // where a finger went down, for swiping between days
+    private var swipeY = 0f
+    private var swipeOk = false
+    private val chains by lazy { ChainsPage(this) { render() } }
+    private val notesPage by lazy { NotesPage(this) { render() } }
     private var selected: LocalDate = LocalDate.now()   // the day picked in the calendar
     private var month: YearMonth = YearMonth.now()      // the month the calendar shows
     private var calMode = MONTH                      // how the Calendar page shows time: month, week or one day
@@ -107,10 +118,14 @@ class MainActivity : Activity() {
         if (savedInstanceState != null) {
             tab = savedInstanceState.getInt("tab")
             savedInstanceState.getString("selected")?.let { selected = LocalDate.parse(it) }
+            savedInstanceState.getString("shown")?.let { shown = LocalDate.parse(it) }
             month = YearMonth.from(selected)
         }
 
-        tabViews = listOf(findViewById(R.id.tab_today), findViewById(R.id.tab_calendar), findViewById(R.id.tab_someday))
+        tabViews = listOf(
+            findViewById(R.id.tab_today), findViewById(R.id.tab_calendar), findViewById(R.id.tab_chains),
+            findViewById(R.id.tab_notes), findViewById(R.id.tab_someday)
+        )
         for (i in tabViews.indices) tabViews[i].setOnClickListener {
             if (tab != i) {
                 tab = i
@@ -170,6 +185,7 @@ class MainActivity : Activity() {
         forceReview = intent?.getBooleanExtra("review", false) == true
         openPlan = intent?.getBooleanExtra("plan", false) == true
         if (intent?.getBooleanExtra("day", false) == true) showDay()
+        if (intent?.getBooleanExtra("chains", false) == true) tab = 2
     }
 
     private fun applySide() {
@@ -190,22 +206,30 @@ class MainActivity : Activity() {
         if (intent.getBooleanExtra("review", false)) forceReview = true
         if (intent.getBooleanExtra("plan", false)) openPlan = true
         if (intent.getBooleanExtra("day", false)) showDay()
+        if (intent.getBooleanExtra("chains", false)) tab = 2
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putInt("tab", tab)
         outState.putString("selected", selected.toString())
+        outState.putString("shown", shown.toString())
     }
 
     override fun onResume() {
         super.onResume()
+        // The theme was switched in Settings: build the screen again in the new colours.
+        if (Look.isLight(this) != lightApplied) {
+            recreate()
+            return
+        }
         val now = LocalDate.now()
         if (now != today) {
             if (selected == today) {
                 selected = now
                 month = YearMonth.from(now)
             }
+            if (shown == today) shown = now
             today = now
         }
         render(if (firstShow) PAGE else NONE)
@@ -228,8 +252,9 @@ class MainActivity : Activity() {
                 input.clearFocus()
                 (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
                     .hideSoftInputFromWindow(input.windowToken, 0)
-                if (tab != 0) {
+                if (tab != 0 || shown != today) {
                     tab = 0
+                    shown = today
                     render(PAGE)
                     scroll.scrollTo(0, 0)
                 } else {
@@ -239,6 +264,63 @@ class MainActivity : Activity() {
             return true
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    /**
+     * Swiping left or right anywhere on the Today page shows the next or previous day.
+     * Watched here, before the page's own views, so it works over task lines too. Rows of
+     * chips that scroll sideways keep their own swipe.
+     */
+    override fun dispatchTouchEvent(e: MotionEvent): Boolean {
+        if (tab == 0) when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                swipeX = e.rawX
+                swipeY = e.rawY
+                swipeOk = startsOnPage(e.rawX.toInt(), e.rawY.toInt())
+            }
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> swipeOk = false
+            MotionEvent.ACTION_UP -> {
+                val dx = e.rawX - swipeX
+                val dy = e.rawY - swipeY
+                if (swipeOk && !gestureActive && abs(dx) > dp(70) && abs(dx) > abs(dy) * 1.6f) {
+                    swipeOk = false
+                    val handled = super.dispatchTouchEvent(e)
+                    goDay(if (dx < 0) 1 else -1)
+                    return handled
+                }
+            }
+        }
+        return super.dispatchTouchEvent(e)
+    }
+
+    private fun startsOnPage(x: Int, y: Int): Boolean {
+        val r = android.graphics.Rect()
+        if (!scroll.getGlobalVisibleRect(r) || !r.contains(x, y)) return false
+        for (id in intArrayOf(R.id.filter_scroll, R.id.today_chips_scroll)) {
+            val v = list.findViewById<View>(id) ?: continue
+            if (v.visibility == View.VISIBLE && v.getGlobalVisibleRect(r) && r.contains(x, y)) return false
+        }
+        return true
+    }
+
+    /** The next (1) or previous (-1) day on the Today page. */
+    private fun goDay(dir: Int) = goTo(shown.plusDays(dir.toLong()))
+
+    /** Shows another day on the Today page; the page glides in from that side. */
+    private fun goTo(target: LocalDate) {
+        if (target == shown) return
+        val dir = if (target.isAfter(shown)) 1 else -1
+        shown = target
+        render()
+        scroll.scrollTo(0, 0)
+        list.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        for (i in 0 until list.childCount) {
+            val v = list.getChildAt(i)
+            v.alpha = 0f
+            v.translationX = dir * dp(48).toFloat()
+            v.animate().alpha(1f).translationX(0f).setStartDelay(min(i, 8) * 14L).setDuration(220)
+                .setInterpolator(DecelerateInterpolator(1.6f)).start()
+        }
     }
 
     override fun onPause() {
@@ -257,8 +339,9 @@ class MainActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (tab != 0) {
+        if (tab != 0 || shown != today) {
             tab = 0
+            shown = today
             render(PAGE)
             scroll.scrollTo(0, 0)
         } else {
@@ -297,6 +380,8 @@ class MainActivity : Activity() {
         when (tab) {
             0 -> renderToday()
             1 -> renderCalendar()
+            2 -> chains.build(list)
+            3 -> notesPage.build(list)
             else -> renderSomeday()
         }
         entering = false
@@ -310,30 +395,63 @@ class MainActivity : Activity() {
             tabViews[i].compoundDrawableTintList = ColorStateList.valueOf(c)
         }
         input.hint = when (tab) {
-            0 -> "Add a task for today"
+            0 -> "Add a task for " + relDayInline(shown, today)
             1 -> "Add a task for " + relDayInline(selected, today)
             else -> "Add a task for someday"
+        }
+        // Chains and Notes have their own buttons for adding; the task bar is not needed there.
+        val tasksPage = tab != 2 && tab != 3
+        findViewById<View>(R.id.quick_bar).visibility = if (tasksPage) View.VISIBLE else View.GONE
+        if (!tasksPage) {
+            findViewById<View>(R.id.quick_preview).visibility = View.GONE
+            input.clearFocus()
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(input.windowToken, 0)
         }
     }
 
     private fun renderToday() {
+        val day = shown
+        val isToday = day == today
         val h = layoutInflater.inflate(R.layout.header_today, list, false)
         list.addView(h)
         val hour = LocalTime.now().hour
+        val away = java.time.temporal.ChronoUnit.DAYS.between(today, day)
         h.findViewById<TextView>(R.id.today_greeting).text = when {
+            away == 1L -> "Tomorrow"
+            away == -1L -> "Yesterday"
+            away > 1L -> "In $away days"
+            away < -1L -> "${-away} days ago"
             hour < 5 -> "Still up, Alp"
             hour < 12 -> "Good morning, Alp"
             hour < 18 -> "Good afternoon, Alp"
             else -> "Good evening, Alp"
-        } + Store.streak(today).let { if (it >= 2) "  ·  $it-day streak" else "" }
+        } + (if (isToday) Store.streak(today).let { if (it >= 2) "  ·  $it-day streak" else "" } else "")
         h.findViewById<View>(R.id.btn_stats).setOnClickListener {
             startActivity(Intent(this, StatsActivity::class.java))
         }
-        h.findViewById<TextView>(R.id.today_title).text = weekdayName(today)
-        h.findViewById<TextView>(R.id.today_sub).text = dayMonth(today)
+        h.findViewById<View>(R.id.btn_courses).setOnClickListener {
+            startActivity(Intent(this, CoursesActivity::class.java))
+        }
+        h.findViewById<TextView>(R.id.today_title).text = weekdayName(day)
+        h.findViewById<TextView>(R.id.today_sub).text = dayMonth(day) + (if (day.year != today.year) " " + day.year else "")
         h.findViewById<View>(R.id.btn_settings).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
+
+        // "Back to today" on other days, and how many days are left until each exam.
+        val chipRow = h.findViewById<LinearLayout>(R.id.today_chips)
+        fun topChip(c: TextView, onClick: () -> Unit) {
+            c.setOnClickListener { onClick() }
+            chipRow.addView(c)
+            (c.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8)
+        }
+        if (!isToday) topChip(chip("Back to today", true)) { goTo(today) }
+        for ((course, exam) in Courses.upcomingExams(today)) {
+            topChip(chip(course.code + " exam  ·  " + Courses.countdown(exam.date, today), false, Look.tone(course.color))) {
+                startActivity(Intent(this, CoursesActivity::class.java))
+            }
+        }
+        if (chipRow.childCount > 0) h.findViewById<View>(R.id.today_chips_scroll).visibility = View.VISIBLE
 
         val summit = h.findViewById<SummitView>(R.id.summit)
         val progress = h.findViewById<TextView>(R.id.today_progress)
@@ -342,8 +460,8 @@ class MainActivity : Activity() {
         if (carry != null && !entering) summit.setProgress(carry, false)
         var first = true
         refreshHeader = {
-            val all = Store.on(today)
-            val done = all.count { it.isDone(today) }
+            val all = Store.on(day)
+            val done = all.count { it.isDone(day) }
             summit.setProgress(if (all.isEmpty()) 0f else done.toFloat() / all.size, !first || entering || carry != null)
             first = false
             progress.text = when {
@@ -352,12 +470,13 @@ class MainActivity : Activity() {
                 else -> "$done of ${all.size} done"
             }
             progress.setTextColor(getColor(if (all.isNotEmpty() && done == all.size) R.color.accent else R.color.text_primary))
-            val left = all.filter { !it.isDone(today) }.sumOf { it.duration }
+            val left = all.filter { !it.isDone(day) }.sumOf { it.duration }
             planned.text = if (left > 0) fmtDuration(left) + " left" else ""
         }
         refreshHeader()
 
-        val missed = Store.missed(today).size
+        // Banners about today only show on today.
+        val missed = if (isToday) Store.missed(today).size else 0
         val banner = h.findViewById<TextView>(R.id.review_banner)
         if (missed > 0) {
             banner.visibility = View.VISIBLE
@@ -370,7 +489,7 @@ class MainActivity : Activity() {
 
         val p = prefs(this)
         val focusEnd = p.getLong("focusEnd", 0L)
-        if (focusEnd > System.currentTimeMillis() || (focusEnd > 0L && p.getBoolean("focusOpen", false))) {
+        if (isToday && (focusEnd > System.currentTimeMillis() || (focusEnd > 0L && p.getBoolean("focusOpen", false)))) {
             val focus = h.findViewById<TextView>(R.id.focus_banner)
             val until = java.time.Instant.ofEpochMilli(focusEnd).atZone(java.time.ZoneId.systemDefault()).toLocalTime()
             focus.visibility = View.VISIBLE
@@ -386,16 +505,17 @@ class MainActivity : Activity() {
             }
         }
         val nowMinutes = LocalTime.now().hour * 60 + LocalTime.now().minute
-        if (p.getBoolean("evening", true) && nowMinutes >= p.getInt("eveningTime", 21 * 60 + 30) &&
+        if (isToday && p.getBoolean("evening", true) && nowMinutes >= p.getInt("eveningTime", 21 * 60 + 30) &&
             p.getString("planShown", "") != today.toString()
         ) {
             val plan = h.findViewById<TextView>(R.id.plan_banner)
             plan.visibility = View.VISIBLE
-            plan.text = "Evening: set up tomorrow  ·  Plan"
+            plan.text = if (today.dayOfWeek == java.time.DayOfWeek.SUNDAY) "Sunday: weekly review and plan Monday  ·  Open"
+            else "Evening: set up tomorrow  ·  Plan"
             plan.setOnClickListener { startActivity(Intent(this, PlanActivity::class.java)) }
         }
 
-        val all = Store.on(today)
+        val all = Store.on(day)
         val used = Store.categories.filter { c -> all.any { it.categoryId == c.id } }
         if (filter.isNotEmpty() && used.none { it.id == filter }) filter = ""
         if (used.size >= 2 || filter.isNotEmpty()) {
@@ -411,13 +531,13 @@ class MainActivity : Activity() {
                 (c.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8)
             }
             add("All", "", getColor(R.color.accent))
-            for (c in used) add(c.name, c.id, c.color)
+            for (c in used) add(c.name, c.id, Look.tone(c.color))
         }
 
-        addEvents(today)
-        val shown = all.filter { filter.isEmpty() || it.categoryId == filter }
-        if (shown.isEmpty()) list.addView(emptyText("A clear day.\nAdd your first task below."))
-        for (t in shown) list.addView(taskRow(t, today))
+        addEvents(day)
+        val visible = all.filter { filter.isEmpty() || it.categoryId == filter }
+        if (visible.isEmpty()) list.addView(emptyText(if (isToday) "A clear day.\nAdd your first task below." else "Nothing planned for this day."))
+        for (t in visible) list.addView(taskRow(t, day))
     }
 
     private fun renderCalendar() {
@@ -605,6 +725,10 @@ class MainActivity : Activity() {
         val events = PhoneCalendar.on(this, d)
         addEvents(d, true)
 
+        // Notes pinned to this day, and study blocks Summit suggests before an exam.
+        for (n in Store.notes.items.filter { !it.developer && it.pin == d }) list.addView(noteCard(n, today, false))
+        for (sg in Courses.studyBlocks(this, d, today)) list.addView(suggestionCard(sg))
+
         // Tasks without a time: a row on top. Hold one and drag it into the day to give it a time.
         val all = Store.on(d)
         val loose = all.filter { it.time < 0 }
@@ -622,7 +746,7 @@ class MainActivity : Activity() {
             for (t in loose) {
                 val done = t.isDone(d)
                 val c = chip(t.title + (if (t.duration > 0) "  ·  " + fmtDuration(t.duration) else ""), false,
-                    Store.category(t.categoryId)?.color ?: getColor(R.color.accent))
+                    Store.colorOf(t) ?: getColor(R.color.accent))
                 c.maxWidth = dp(240)
                 c.maxLines = 1
                 c.ellipsize = android.text.TextUtils.TruncateAt.END
@@ -789,6 +913,49 @@ class MainActivity : Activity() {
         list.postDelayed(ticker, 1000L)
     }
 
+    /** "Study ECON 101 · 14:00–15:00" with Accept and Skip. Accepting makes it a task in the timeline. */
+    private fun suggestionCard(sg: Courses.Suggestion): View {
+        val color = Look.tone(sg.course.color)
+        val card = LinearLayout(this)
+        card.orientation = LinearLayout.VERTICAL
+        card.background = rounded(withAlpha(color, 0x1F), dp(16), withAlpha(color, 0x66), dp(1))
+        card.setPadding(dp(16), dp(12), dp(16), dp(12))
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = dp(10)
+        card.layoutParams = lp
+        val title = TextView(this)
+        title.text = "Suggested: " + sg.title + "  ·  " + fmtTime(sg.time) + " – " + fmtTime(sg.time + sg.duration)
+        title.textSize = 15f
+        title.setTextColor(getColor(R.color.text_primary))
+        card.addView(title)
+        val why = TextView(this)
+        why.text = sg.why
+        why.textSize = 13f
+        why.setTextColor(getColor(R.color.text_secondary))
+        why.setPadding(0, dp(2), 0, dp(10))
+        card.addView(why)
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        val accept = chip("Accept", true, color)
+        accept.setOnClickListener {
+            Courses.accept(this, sg)
+            card.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            render()
+        }
+        row.addView(accept)
+        val skip = chip("Skip", false)
+        skip.setOnClickListener {
+            collapse(card) {
+                Courses.skip(sg)
+                render()
+            }
+        }
+        row.addView(skip)
+        (skip.layoutParams as LinearLayout.LayoutParams).marginStart = dp(8)
+        card.addView(row)
+        return card
+    }
+
     /** Tick or untick from the Day view (also the "Finish" button of the running task). */
     private fun setDone(t: Task, d: LocalDate, value: Boolean) {
         Store.setDone(t, d, value)
@@ -825,7 +992,7 @@ class MainActivity : Activity() {
         title.setTextColor(getColor(R.color.text_primary))
         list.addView(title)
         val sub = TextView(this)
-        sub.text = "Tasks without a date. Swipe one left to do it today."
+        sub.text = "Tasks without a date. Hold one to give it a day."
         sub.textSize = 15f
         sub.setTextColor(getColor(R.color.text_secondary))
         sub.setPadding(0, dp(2), 0, dp(18))
@@ -871,7 +1038,7 @@ class MainActivity : Activity() {
             row.gravity = Gravity.CENTER_VERTICAL
             row.setPadding(0, dp(7), 0, dp(7))
             val bar = View(this)
-            bar.background = rounded(e.color, dp(2))
+            bar.background = rounded(Look.tone(e.color), dp(2))
             val lp = LinearLayout.LayoutParams(dp(3), dp(32))
             lp.marginStart = dp(10)
             lp.marginEnd = dp(24)
@@ -921,33 +1088,16 @@ class MainActivity : Activity() {
         return if (total > 0) "$done of $total" else ""
     }
 
-    /** One task line on screen: `view` is the outer frame with the swipe hints behind, `inner` the line itself. */
-    private class Row(
-        val view: FrameLayout, val inner: View, val task: Task, val date: LocalDate?,
-        val hintStart: TextView, val hintEnd: TextView
-    )
+    /** One task line on screen: `view` is the outer frame, `inner` the line itself. */
+    private class Row(val view: FrameLayout, val inner: View, val task: Task, val date: LocalDate?)
 
     private fun key(t: Task, d: LocalDate?): String = t.id + "|" + (d?.toString() ?: "")
 
     private fun taskRow(t: Task, d: LocalDate?): View {
         val frame = FrameLayout(this)
-        fun hint(gravity: Int): TextView {
-            val tv = TextView(this)
-            tv.textSize = 14f
-            tv.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            tv.alpha = 0f
-            tv.gravity = Gravity.CENTER_VERTICAL
-            tv.setPadding(dp(6), 0, dp(6), 0)
-            frame.addView(
-                tv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT, gravity)
-            )
-            return tv
-        }
-        val start = hint(Gravity.START)
-        val end = hint(Gravity.END)
         val inner = layoutInflater.inflate(R.layout.row_task, frame, false)
         frame.addView(inner)
-        val r = Row(frame, inner, t, d, start, end)
+        val r = Row(frame, inner, t, d)
         rows.add(r)
         bindRow(r, false)
         inner.setOnTouchListener(RowTouch(r))
@@ -1017,10 +1167,9 @@ class MainActivity : Activity() {
         val t = r.task
         val d = r.date
         val done = t.isDone(d)
-        val cat = Store.category(t.categoryId)
 
         val box = row.findViewById<BoxView>(R.id.box)
-        box.color = cat?.color ?: getColor(R.color.accent)
+        box.color = Store.colorOf(t) ?: getColor(R.color.accent)
         box.setChecked(done, animate)
         box.contentDescription = if (done) "Done" else "Not done"
         box.setOnClickListener { toggle(r) }
@@ -1065,7 +1214,8 @@ class MainActivity : Activity() {
         if (t.priority == 3) part("High", getColor(R.color.danger))
         if (t.time >= 0) part(fmtTime(t.time), getColor(R.color.text_primary))
         if (t.duration > 0) part(fmtDuration(t.duration))
-        if (cat != null) part(cat.name, cat.color)
+        Store.courseOf(t)?.let { part(it.code, Look.tone(it.color)) }
+        if (cat != null) part(cat.name, Look.tone(cat.color))
         if (t.repeating) part(repeatLabel(t.repeatMask))
         if (t.subtasks.isNotEmpty()) {
             val ticked = t.subtasks.count { t.subKey(d, it) in t.subDone }
@@ -1208,36 +1358,19 @@ class MainActivity : Activity() {
         collapse(bar) {}
     }
 
-    // ---------- Swipe and drag on a task ----------
-
-    /** What a swipe to the left does with this task, in a word. */
-    private fun leftTarget(r: Row): LocalDate? {
-        val date = r.task.date ?: return today
-        return if (date.isAfter(today)) date.plusDays(1) else today.plusDays(1)
-    }
-
-    private fun leftLabel(r: Row): String = when {
-        r.task.repeating && r.date != null -> "Skip"
-        else -> relDay(leftTarget(r) ?: today, today)
-    }
-
-    private fun leftAction(r: Row) {
-        if (r.task.repeating && r.date != null) skip(r.task, r.date) else moveTo(r.task, leftTarget(r))
-    }
+    // ---------- Holding and dragging a task ----------
 
     /**
      * Touch handling of one task line:
-     * tap = edit, swipe right = tick, swipe left = move on,
-     * hold = menu, hold and drag = put the task somewhere else in its list.
+     * tap = edit, hold = menu (move, skip, delete), hold and drag = put the task somewhere else
+     * in its list. Ticking is done with the box. A sideways swipe is left to the page (other day).
      */
     private inner class RowTouch(val r: Row) : View.OnTouchListener {
         private val slop = ViewConfiguration.get(this@MainActivity).scaledTouchSlop
-        private val threshold = dp(84).toFloat()
         private var downX = 0f
         private var downY = 0f
         private var mode = IDLE
         private var moved = false
-        private var armed = false
         private var group: List<Row> = emptyList()
         private var from = 0
         private var to = 0
@@ -1250,7 +1383,6 @@ class MainActivity : Activity() {
                     downY = e.rawY
                     mode = IDLE
                     moved = false
-                    armed = false
                     v.drawableHotspotChanged(e.x, e.y)
                     v.isPressed = true
                     v.postDelayed(holding, ViewConfiguration.getLongPressTimeout().toLong())
@@ -1259,21 +1391,11 @@ class MainActivity : Activity() {
                     val dx = e.rawX - downX
                     val dy = e.rawY - downY
                     when (mode) {
-                        IDLE -> if (!moved) {
-                            if (abs(dx) > slop && abs(dx) > abs(dy) * 1.5f) {
-                                release(v)
-                                moved = true
-                                mode = SWIPE
-                                claim(v)
-                                r.hintStart.text = if (r.task.isDone(r.date)) "Not done" else "Done"
-                                r.hintEnd.text = leftLabel(r)
-                            } else if (abs(dx) > slop || abs(dy) > slop) {
-                                // A vertical move: the page scrolls and takes the touch from here.
-                                release(v)
-                                moved = true
-                            }
+                        IDLE -> if (!moved && (abs(dx) > slop || abs(dy) > slop)) {
+                            // The page scrolls (or swipes to another day) and takes the touch from here.
+                            release(v)
+                            moved = true
                         }
-                        SWIPE -> swipeTo(dx)
                         DRAG -> dragTo(dy)
                     }
                 }
@@ -1283,7 +1405,6 @@ class MainActivity : Activity() {
                     mode = IDLE
                     when (was) {
                         IDLE -> if (!moved) v.performClick()
-                        SWIPE -> endSwipe(e.rawX - downX)
                         DRAG -> endDrag(true)
                     }
                 }
@@ -1291,7 +1412,6 @@ class MainActivity : Activity() {
                     val was = mode
                     release(v)
                     mode = IDLE
-                    if (was == SWIPE) endSwipe(0f)
                     if (was == DRAG) endDrag(false)
                 }
             }
@@ -1303,39 +1423,10 @@ class MainActivity : Activity() {
             v.isPressed = false
         }
 
-        /** Keeps the page from scrolling while a swipe or drag is going on. */
+        /** Keeps the page from scrolling while a drag is going on. */
         private fun claim(v: View) {
             v.parent?.requestDisallowInterceptTouchEvent(true)
             gestureActive = true
-        }
-
-        private fun swipeTo(dx: Float) {
-            r.inner.translationX = dx
-            val f = min(1f, abs(dx) / threshold)
-            val active = if (dx > 0) r.hintStart else r.hintEnd
-            val other = if (dx > 0) r.hintEnd else r.hintStart
-            active.alpha = f
-            other.alpha = 0f
-            active.setTextColor(getColor(if (f >= 1f) R.color.accent else R.color.text_secondary))
-            if ((f >= 1f) != armed) {
-                armed = f >= 1f
-                if (armed) r.view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-            }
-        }
-
-        private fun endSwipe(dx: Float) {
-            gestureActive = false
-            r.hintStart.animate().alpha(0f).setDuration(160).start()
-            r.hintEnd.animate().alpha(0f).setDuration(160).start()
-            when {
-                dx >= threshold -> {
-                    r.inner.animate().translationX(0f).setDuration(220).setInterpolator(DecelerateInterpolator(1.6f)).start()
-                    toggle(r)
-                }
-                dx <= -threshold -> r.inner.animate().translationX(-r.inner.width.toFloat()).alpha(0f).setDuration(180)
-                    .withEndAction { collapse(r.view) { leftAction(r) } }.start()
-                else -> r.inner.animate().translationX(0f).setDuration(220).setInterpolator(DecelerateInterpolator(1.6f)).start()
-            }
         }
 
         /** The finger rested on the line: lift it. Open tasks can then be dragged within their list. */
@@ -1408,7 +1499,7 @@ class MainActivity : Activity() {
 
     /** The day new tasks go to on the current page (null on Someday). */
     private fun targetDate(): LocalDate? = when (tab) {
-        0 -> today
+        0 -> shown
         1 -> selected
         else -> null
     }
