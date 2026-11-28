@@ -521,7 +521,7 @@ class FocusWidget : AppWidgetProvider() {
             val ids = manager.getAppWidgetIds(ComponentName(ctx, FocusWidget::class.java))
             if (ids == null || ids.isEmpty()) return
             Store.load(ctx)
-            val theme = Look.theme(ctx)
+            val theme = Look.widgetTheme(ctx)
             val light = theme == "light"
             val cPrimary = if (light) 0xFF1F1A16.toInt() else 0xFFF2F3F5.toInt()
             val cSecondary = if (light) 0xFF6B6159.toInt() else 0xFF9096A0.toInt()

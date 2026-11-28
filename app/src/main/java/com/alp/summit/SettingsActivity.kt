@@ -70,6 +70,22 @@ class SettingsActivity : Activity() {
         }
         note("Chosen on each device. Tap to switch: Dark → Grey → Light.")
 
+        label("Widgets")
+        val wt = p.getString("widgetTheme", "app") ?: "app"
+        row("Widget theme", if (wt == "app") "Same as app" else wt.replaceFirstChar { it.uppercase() }, getColor(R.color.accent)) {
+            val next = when (wt) {
+                "app" -> "dark"
+                "dark" -> "grey"
+                "grey" -> "light"
+                else -> "app"
+            }
+            p.edit().putString("widgetTheme", next).apply()
+            TodayWidget.refresh(this)
+            FocusWidget.refresh(this)
+            render()
+        }
+        note("All home-screen widgets use this, separately from the app. Tap to switch: Same as app → Dark → Grey → Light.")
+
         label("Morning")
         val nudge = p.getBoolean("nudge", true)
         row("Morning nudge", if (nudge) "On" else "Off", if (nudge) getColor(R.color.accent) else 0) {
@@ -142,6 +158,23 @@ class SettingsActivity : Activity() {
         row("Allowed apps during focus", "›", 0) { startActivity(Intent(this, AllowedAppsActivity::class.java)) }
         note(if (blocking) "During focus every other app shows Summit's block screen until the timer ends or you stop the session."
             else "Off: apps are not blocked. Tap App blocking for the steps to switch on Summit in Accessibility settings.")
+
+        label("Routines")
+        for (r in Store.routines.items.sortedBy { it.name.lowercase() }) {
+            row(r.name, plural(r.items.size, "task") + "  ›", 0) {
+                startActivity(Intent(this, RoutineActivity::class.java).putExtra("id", r.id))
+            }
+        }
+        row("New routine", "+", getColor(R.color.accent)) { startActivity(Intent(this, RoutineActivity::class.java)) }
+        note("A routine is a saved set of tasks. Apply it to a day from its menu (⋮ on Today or in the Calendar) or in the evening planning; save a day as a routine from the same menu.")
+
+        label("Evening reflection")
+        val reflect = p.getBoolean("reflectOn", true)
+        row("Reflection questions", if (reflect) "On" else "Off", if (reflect) getColor(R.color.accent) else 0) {
+            p.edit().putBoolean("reflectOn", !reflect).apply()
+            render()
+        }
+        note("Two optional questions in the evening planning, kept as a note pinned to that day.")
 
         label("Chains")
         val habitRemind = p.getBoolean("habitRemind", true)

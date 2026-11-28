@@ -11,8 +11,8 @@ android {
         applicationId = "com.alp.summit"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "5.0"
+        versionCode = 15
+        versionName = "5.2"
     }
 
     // Fixed key so every new APK installs as an update over the previous one.

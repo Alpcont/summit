@@ -26,6 +26,10 @@ class Task(val id: String = UUID.randomUUID().toString()) {
     var priority = 2                   // 1 low, 2 medium, 3 high
     var categoryId = ""
     var repeatMask = 0                 // bit 0 = Monday ... bit 6 = Sunday, 0 = does not repeat
+    // Other rhythms (see occursOn): "" = on the weekdays of repeatMask; "d:3" every 3 days;
+    // "w:2" every 2 weeks on the weekdays of repeatMask; "md:15" monthly on the 15th (last day in a
+    // shorter month); "mw:-1:5" monthly on the last Friday ("mw:2:1" = 2nd Monday).
+    var repeatRule = ""
     var endDate: LocalDate? = null     // last day of a repeating task, null = no end
     var remind = 0                     // minutes before `time` to notify, -1 = no reminder
     val moreReminds = ArrayList<Int>()  // further reminders (minutes before), besides `remind`
@@ -56,9 +60,36 @@ class Task(val id: String = UUID.randomUUID().toString()) {
         if (d.isBefore(start)) return false
         val end = endDate
         if (end != null && d.isAfter(end)) return false
-        if (repeatMask and (1 shl (d.dayOfWeek.value - 1)) == 0) return false
+        if (!onRhythm(start, d)) return false
         return d.toString() !in skipDates
     }
+
+    /** Whether `d` is on the task's rhythm (weekdays, every N days or weeks, a monthly date or weekday). */
+    private fun onRhythm(start: LocalDate, d: LocalDate): Boolean {
+        val bit = repeatMask and (1 shl (d.dayOfWeek.value - 1)) != 0
+        val p = repeatRule.split(':')
+        return when (p[0]) {
+            "d" -> java.time.temporal.ChronoUnit.DAYS.between(start, d) % maxOf(1, p.getOrNull(1)?.toIntOrNull() ?: 1) == 0L
+            "w" -> {
+                val n = maxOf(1, p.getOrNull(1)?.toIntOrNull() ?: 1)
+                val weeks = java.time.temporal.ChronoUnit.WEEKS.between(
+                    start.minusDays((start.dayOfWeek.value - 1).toLong()), d.minusDays((d.dayOfWeek.value - 1).toLong())
+                )
+                bit && weeks % n == 0L
+            }
+            "md" -> d.dayOfMonth == minOf(p.getOrNull(1)?.toIntOrNull() ?: start.dayOfMonth, d.lengthOfMonth())
+            "mw" -> {
+                val nth = p.getOrNull(1)?.toIntOrNull() ?: 1
+                val dow = p.getOrNull(2)?.toIntOrNull() ?: start.dayOfWeek.value
+                d.dayOfWeek.value == dow &&
+                    (if (nth < 0) d.plusWeeks(1).month != d.month else (d.dayOfMonth - 1) / 7 + 1 == nth)
+            }
+            else -> bit
+        }
+    }
+
+    /** "Daily", "Mon Wed", "Every 3 days", "Every 2 weeks on Tue", "Monthly on the 15th", "Last Friday of the month". */
+    fun repeatText(): String = ruleText(repeatRule, repeatMask, date)
 
     fun isDone(d: LocalDate?): Boolean =
         if (repeating && d != null) d.toString() in doneDates else done
@@ -72,7 +103,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
     /** Takes over everything from another copy of the same task (one that arrived from another device). */
     fun assign(o: Task) {
         title = o.title; notes = o.notes; date = o.date; time = o.time; duration = o.duration
-        priority = o.priority; categoryId = o.categoryId; repeatMask = o.repeatMask; endDate = o.endDate
+        priority = o.priority; categoryId = o.categoryId; repeatMask = o.repeatMask; endDate = o.endDate; repeatRule = o.repeatRule
         remind = o.remind; done = o.done; rank = o.rank; spent = o.spent; created = o.created; updated = o.updated
         origin = o.origin; moves = o.moves; habitId = o.habitId; courseId = o.courseId
         moreReminds.clear(); moreReminds.addAll(o.moreReminds)
@@ -108,8 +139,9 @@ object Store {
     val courses = Shelf("courses") { Course.from(it) }
     val assignments = Shelf("assignments") { Assignment.from(it) }
     val sessions = Shelf("sessions") { FocusSession.from(it) }
+    val routines = Shelf("routines") { Routine.from(it) }
     /** Everything besides tasks that is kept on the device and synced the same way. */
-    val shelves: List<Shelf<*>> = listOf(habits, notes, courses, assignments, sessions)
+    val shelves: List<Shelf<*>> = listOf(habits, notes, courses, assignments, sessions, routines)
 
     // Bookkeeping for sync between devices (see Sync.kt).
     val syncedIds = HashSet<String>()       // tasks the cloud knows about; one missing here was deleted
@@ -215,6 +247,7 @@ object Store {
         if (t.moves > 0) o.put("moves", t.moves)
         if (t.habitId.isNotEmpty()) o.put("habit", t.habitId)
         if (t.courseId.isNotEmpty()) o.put("course", t.courseId)
+        if (t.repeatRule.isNotEmpty()) o.put("rule", t.repeatRule)
         if (t.moreReminds.isNotEmpty()) o.put("moreReminds", JSONArray(t.moreReminds))
         return o
     }
@@ -266,6 +299,7 @@ object Store {
         t.moves = j.optInt("moves", 0)
         t.habitId = j.optString("habit")
         t.courseId = j.optString("course")
+        t.repeatRule = j.optString("rule")
         j.optJSONArray("moreReminds")?.let { a -> for (k in 0 until a.length()) t.moreReminds.add(a.optInt(k)) }
         return t
     }
@@ -601,6 +635,7 @@ object Store {
         t.rank = -1.0
         if (d == null) {
             t.repeatMask = 0
+            t.repeatRule = ""
             t.endDate = null
         }
         t.updated = System.currentTimeMillis()
@@ -852,6 +887,7 @@ class Note(id: String = UUID.randomUUID().toString()) : Synced(id) {
     var examId = ""                      // exam topics: which exam of the course
     val photos = ArrayList<String>()     // photo ids (files in photos/, synced separately, see Sync.kt)
     val tasked = HashSet<String>()       // lines already turned into tasks
+    var doneIn = ""                      // developer note: the Summit version it was marked Done in (changelog)
 
     val isCourse: Boolean get() = courseId.isNotEmpty()
 
@@ -863,7 +899,9 @@ class Note(id: String = UUID.randomUUID().toString()) : Synced(id) {
             .put("pin", pin?.toString() ?: "").put("type", type).put("open", open)
             .put("created", created).put("updated", updated)
         // Written only when used, so notes from before keep the same fingerprint.
-        if (courseId.isNotEmpty()) o.put("course", courseId).put("kind", kind)
+        if (courseId.isNotEmpty()) o.put("course", courseId)
+        if (courseId.isNotEmpty() || kind != "plain") o.put("kind", kind)
+        if (doneIn.isNotEmpty()) o.put("doneIn", doneIn)
         due?.let { o.put("due", it.toString()) }
         if (examId.isNotEmpty()) o.put("exam", examId)
         if (photos.isNotEmpty()) o.put("photos", JSONArray(photos))
@@ -890,6 +928,7 @@ class Note(id: String = UUID.randomUUID().toString()) : Synced(id) {
             n.kind = j.optString("kind", "plain").ifEmpty { "plain" }
             n.due = j.dateOrNull("due")
             n.examId = j.optString("exam")
+            n.doneIn = j.optString("doneIn")
             j.optJSONArray("photos")?.let { p -> for (i in 0 until p.length()) n.photos.add(p.getString(i)) }
             n.tasked.addAll(stringSet(j.optJSONArray("tasked")))
             return n
@@ -1045,6 +1084,32 @@ fun beforeLabel(m: Int): String {
 
 fun plural(n: Int, word: String): String = if (n == 1) "$n $word" else "$n ${word}s"
 
+private val DAY_FULL = arrayOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+fun ordinal(n: Int): String = n.toString() + when {
+    n % 100 in 11..13 -> "th"
+    n % 10 == 1 -> "st"
+    n % 10 == 2 -> "nd"
+    n % 10 == 3 -> "rd"
+    else -> "th"
+}
+
+/** Words for a repeat rule (see Task.repeatRule). */
+fun ruleText(rule: String, mask: Int, start: LocalDate?): String {
+    val p = rule.split(':')
+    return when (p[0]) {
+        "d" -> "Every ${p.getOrNull(1) ?: "1"} days"
+        "w" -> "Every ${p.getOrNull(1) ?: "1"} weeks on " + repeatLabel(mask)
+        "md" -> "Monthly on the " + ordinal(p.getOrNull(1)?.toIntOrNull() ?: start?.dayOfMonth ?: 1)
+        "mw" -> {
+            val nth = p.getOrNull(1)?.toIntOrNull() ?: 1
+            val dow = (p.getOrNull(2)?.toIntOrNull() ?: 1).coerceIn(1, 7)
+            (if (nth < 0) "Last " else ordinal(nth) + " ") + DAY_FULL[dow - 1] + " of the month"
+        }
+        else -> repeatLabel(mask)
+    }
+}
+
 fun repeatLabel(mask: Int): String {
     if (mask == 127) return "Daily"
     if (mask == 31) return "Weekdays"
@@ -1063,6 +1128,7 @@ class Parsed(var title: String) {
     var priority = 0
     var categoryId = ""
     var repeatMask = 0
+    var repeatRule = ""
 
     /** "Tomorrow · 18:00 · 45m · Gym", or "" when nothing special was found. */
     fun summary(today: LocalDate): String {
@@ -1071,7 +1137,7 @@ class Parsed(var title: String) {
         if (hasDate && d != null) parts.add(relDay(d, today))
         if (time >= 0) parts.add(fmtTime(time))
         if (duration > 0) parts.add(fmtDuration(duration))
-        if (repeatMask != 0) parts.add(repeatLabel(repeatMask))
+        if (repeatMask != 0) parts.add(ruleText(repeatRule, repeatMask, date ?: today))
         Store.category(categoryId)?.let { parts.add(it.name) }
         if (priority == 3) parts.add("High")
         if (priority == 1) parts.add("Low")
@@ -1085,6 +1151,9 @@ private val DAY_WORDS = mapOf(
 )
 // "sat" and "sun" are also ordinary words, so they only count after "on", "next" or "every".
 private val DAY_WORDS_LOOSE = mapOf("sat" to 6, "sun" to 7)
+private val NTH = mapOf(
+    "first" to 1, "1st" to 1, "second" to 2, "2nd" to 2, "third" to 3, "3rd" to 3, "fourth" to 4, "4th" to 4, "last" to -1
+)
 private val MONTH_WORDS = listOf("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
 private val MONTH_NAMES = listOf(
     "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"
@@ -1219,6 +1288,59 @@ fun parseQuick(text: String, today: LocalDate, categories: List<Category>): Pars
                 setDate(today.plusDays(1))
                 took = 1
             }
+            // "every 2 days", "every 3 weeks (on mon wed)"
+            w == "every" && n.toIntOrNull() != null && low(i + 2).trimEnd('s') in setOf("day", "week") -> {
+                val k = n.toInt().coerceIn(1, 365)
+                took = 3
+                if (low(i + 2).startsWith("day")) {
+                    if (k == 1) p.repeatMask = 127 else {
+                        p.repeatMask = 127
+                        p.repeatRule = "d:$k"
+                    }
+                } else {
+                    p.repeatRule = "w:$k"
+                    if (low(i + 3) == "on" && day(low(i + 4), true) != 0) {
+                        took = 4
+                        while (true) {
+                            var j = i + took
+                            if (low(j) == "and") j++
+                            val dow = day(low(j), true)
+                            if (dow == 0) break
+                            p.repeatMask = p.repeatMask or (1 shl (dow - 1))
+                            took = j - i + 1
+                        }
+                    }
+                }
+            }
+            // "monthly", "every month", "monthly on the 15th", "every month on the 15th"
+            w == "monthly" || (w == "every" && n == "month") -> {
+                took = if (w == "monthly") 1 else 2
+                var j = i + took
+                if (low(j) == "on") j++
+                if (low(j) == "the") j++
+                val num = Regex("^(\\d{1,2})(st|nd|rd|th)?$").find(low(j))?.groupValues?.get(1)?.toIntOrNull()
+                p.repeatMask = 127
+                if (num != null && num in 1..31) {
+                    p.repeatRule = "md:$num"
+                    took = j - i + 1
+                } else {
+                    p.repeatRule = "md"
+                }
+            }
+            // "last friday of the month", "every 2nd tuesday of the month", "first monday of the month"
+            (if (w == "every") NTH[n] else NTH[w]) != null &&
+                day(low(i + (if (w == "every") 2 else 1)), true) != 0 &&
+                low(i + (if (w == "every") 3 else 2)) == "of" -> {
+                val o = if (w == "every") 1 else 0
+                val nth = NTH[low(i + o)] ?: 1
+                val dow = day(low(i + o + 1), true)
+                var j = i + o + 3
+                if (low(j) == "the") j++
+                if (low(j) == "month") j++
+                took = j - i
+                p.repeatMask = 127
+                p.repeatRule = "mw:$nth:$dow"
+            }
             w == "daily" || (w == "every" && n == "day") -> {
                 p.repeatMask = 127
                 took = if (w == "daily") 1 else 2
@@ -1278,6 +1400,11 @@ fun parseQuick(text: String, today: LocalDate, categories: List<Category>): Pars
         for (k in i until minOf(i + took, words.size)) used[k] = true
         i += maxOf(took, 1)
     }
+
+    // Rhythms that depend on the start day: "every 2 weeks" on its weekday, "monthly" on its date.
+    val start = p.date ?: today
+    if (p.repeatRule.startsWith("w:") && p.repeatMask == 0) p.repeatMask = 1 shl (start.dayOfWeek.value - 1)
+    if (p.repeatRule == "md") p.repeatRule = "md:" + start.dayOfMonth
 
     val rest = words.filterIndexed { k, _ -> !used[k] }
     if (rest.isEmpty()) return Parsed(clean)     // only keywords: keep the line as it was typed

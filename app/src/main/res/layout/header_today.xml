@@ -39,6 +39,12 @@
         </LinearLayout>
 
         <ImageButton
+            android:id="@+id/btn_day_menu"
+            style="@style/IconButton"
+            android:contentDescription="@string/day_menu"
+            android:src="@drawable/ic_more" />
+
+        <ImageButton
             android:id="@+id/btn_courses"
             style="@style/IconButton"
             android:contentDescription="@string/courses"

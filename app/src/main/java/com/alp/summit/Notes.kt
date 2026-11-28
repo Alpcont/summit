@@ -387,9 +387,14 @@ class NotesPage(private val a: Activity, private val rerender: () -> Unit) {
                 Toast.LENGTH_LONG).show()
         }
         copyBar.addView(copy, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)))
+        // What's new: every version and what changed, with my notes it solved.
+        val news = a.mtext("What's new  ›", 13.5f, 700, c(R.color.accent))
+        news.setPadding(0, dp(14), dp(16), 0)
+        news.setOnClickListener { a.startActivity(Intent(a, WhatsNewActivity::class.java)) }
         val cbl = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         cbl.topMargin = dp(14)
         content.addView(copyBar, cbl)
+        content.addView(news)
 
         // Filter chips: Open, Bug, Idea, Change, Done.
         val p = prefs(a)
@@ -586,10 +591,12 @@ class NotesPage(private val a: Activity, private val rerender: () -> Unit) {
             val col = Look.tone(course.color)
             if (notebook == null) tag(course.code, col, withAlpha(col, 0x22))
             tag(kindName(n.kind).uppercase(), col, withAlpha(col, 0x22))
+        } else if (n.kind == "reflection") {
+            tag("REFLECTION", c(R.color.accent), c(R.color.accent_soft))
         } else if (n.developer) {
             val (fg, bg) = tagColors(n.type)
             tag(typeName(n.type).uppercase(), fg, bg)
-            if (!n.open) tag("DONE", c(R.color.text_secondary), withAlpha(c(R.color.text_primary), 0x10))
+            if (!n.open) tag(if (n.doneIn.isNotEmpty()) "DONE IN " + n.doneIn else "DONE", c(R.color.text_secondary), withAlpha(c(R.color.text_primary), 0x10))
         } else {
             val pin = n.pin
             if (pin != null) tag("PINNED  ·  " + relDay(pin, today).uppercase(), c(R.color.accent), c(R.color.accent_soft))
@@ -836,8 +843,15 @@ class NoteActivity : SheetActivity() {
             options.addView(types)
             label(options, "Status")
             val status = FlowLayout(this)
-            choice(status, "Open", note.open) { note.open = true }
-            choice(status, "Done", !note.open) { note.open = false }
+            choice(status, "Open", note.open) {
+                note.open = true
+                note.doneIn = ""
+            }
+            choice(status, "Done", !note.open) {
+                // Remembered for the changelog: the version this was solved in.
+                if (note.open) note.doneIn = appVersion(this)
+                note.open = false
+            }
             options.addView(status)
             text(options, "Open notes go into \"Copy for Claude\". Mark a note Done once the update has it.", 13f, R.color.text_dim, 10)
         } else {
@@ -938,8 +952,8 @@ class NoteActivity : SheetActivity() {
     /** Every line of the note and every checklist item, each with "+ Task". */
     private fun renderLines() {
         linesBox.removeAllViews()
-        if (!note.isCourse) return
-        val course = Store.courses.get(note.courseId) ?: return
+        if (note.developer) return
+        val course = Store.courses.get(note.courseId)
         val lines = (textInput.text.toString().lines().mapNotNull { noteLine(it) } + note.items.map { it.text }).distinct()
         if (lines.isEmpty()) return
         label(linesBox, "Turn a line into a task")
@@ -955,13 +969,13 @@ class NoteActivity : SheetActivity() {
             tv.setTextColor(getColor(R.color.text_primary))
             row.addView(tv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             val done = line in note.tasked
-            val c = chip(if (done) "✓ Task" else "+ Task", !done, Look.tone(course.color))
+            val c = chip(if (done) "✓ Task" else "+ Task", !done, course?.let { Look.tone(it.color) } ?: getColor(R.color.accent))
             if (!done) c.setOnClickListener {
                 store(force = true)
                 val t = Task()
                 t.title = line
-                t.date = if (note.kind == "homework") note.due ?: today else today
-                t.courseId = course.id
+                t.date = if (note.kind == "homework") note.due ?: today else note.pin?.takeIf { !it.isBefore(today) } ?: today
+                t.courseId = course?.id ?: ""
                 t.origin = "note|" + note.id
                 Store.tasks.add(t)
                 note.tasked.add(line)
@@ -981,7 +995,8 @@ class NoteActivity : SheetActivity() {
 
     private fun renderPhotos() {
         photosBox.removeAllViews()
-        if (!note.isCourse || (note.kind != "lecture" && note.photos.isEmpty())) return
+        // Productivity notes and lecture notes take photos; other course notes show the ones they have.
+        if (note.developer || (note.isCourse && note.kind != "lecture" && note.photos.isEmpty())) return
         label(photosBox, "Photos")
         val grid = FlowLayout(this)
         for (id in note.photos) {

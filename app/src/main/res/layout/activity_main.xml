@@ -107,6 +107,14 @@
             android:textSize="16sp" />
 
         <ImageButton
+            android:id="@+id/quick_mic"
+            style="@style/IconButton"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:contentDescription="@string/speak"
+            android:src="@drawable/ic_mic" />
+
+        <ImageButton
             android:id="@+id/quick_more"
             style="@style/IconButton"
             android:layout_width="40dp"
