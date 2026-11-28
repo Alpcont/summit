@@ -33,7 +33,7 @@ object Reminders {
     private const val HABITS = 3
     private const val STALE = 3 * 60 * 60_000L   // do not show reminders more than 3 hours late
 
-    private class Event(val at: Long, val task: Task?, val date: LocalDate, val kind: Int)
+    private class Event(val at: Long, val task: Task?, val date: LocalDate, val kind: Int, val minutes: Int = -1)
 
     private fun millis(d: LocalDate, minutes: Int): Long =
         d.atStartOfDay(ZoneId.systemDefault()).plusMinutes(minutes.toLong()).toInstant().toEpochMilli()
@@ -54,15 +54,21 @@ object Reminders {
                 val a = millis(d, p.getInt("eveningTime", 21 * 60 + 30))
                 if (a > from && a <= to) out.add(Event(a, null, d, EVENING))
             }
-            if (p.getBoolean("habitRemind", true) && Store.habits.items.isNotEmpty()) {
-                val a = millis(d, p.getInt("habitTime", 21 * 60))
-                if (a > from && a <= to) out.add(Event(a, null, d, HABITS))
+            // Each habit has its own evening time; one notification per time.
+            if (p.getBoolean("habitRemind", true)) {
+                for (m in Store.habits.items.filter { it.remindAt >= 0 }.map { it.remindAt }.distinct()) {
+                    val a = millis(d, m)
+                    if (a > from && a <= to) out.add(Event(a, null, d, HABITS, m))
+                }
             }
             for (t in Store.tasks) {
                 if (t.time < 0 || t.remind < 0 || !t.occursOn(d) || t.isDone(d)) continue
-                val a = millis(d, t.time) - t.remind * 60_000L
-                // a > t.updated: a task edited after its reminder moment does not notify late.
-                if (a > from && a <= to && a > t.updated) out.add(Event(a, t, d, TASK))
+                // A task can have several reminders; each one notifies.
+                for (before in t.reminders()) {
+                    val a = millis(d, t.time) - before * 60_000L
+                    // a > t.updated: a task edited after its reminder moment does not notify late.
+                    if (a > from && a <= to && a > t.updated) out.add(Event(a, t, d, TASK, before))
+                }
             }
             d = d.plusDays(1)
         }
@@ -84,11 +90,13 @@ object Reminders {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         setAlarm(am, next, pi)
-        // A focus session that is still running needs its own alarm (again after a restart).
-        val focusEnd = p.getLong("focusEnd", 0L)
-        if (focusEnd > 0L) {
-            if (focusEnd <= now) focusDone(ctx, true) else setAlarm(am, focusEnd, focusIntent(ctx))
-        }
+        // A focus session has its own alarm for its next break or end, also after a restart.
+        val fpi = PendingIntent.getBroadcast(
+            ctx, 3, Intent(ctx, AlarmReceiver::class.java).setAction(ACTION_FOCUS),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val focusNext = if (Focus.active(ctx)) Focus.tick(ctx) else null
+        if (focusNext != null) setAlarm(am, focusNext, fpi) else am.cancel(fpi)
     }
 
     private fun setAlarm(am: AlarmManager, at: Long, pi: PendingIntent) {
@@ -103,125 +111,26 @@ object Reminders {
         }
     }
 
-    // ---------- Focus timer ----------
-    // The session is only a start and an end time, so it survives the app being closed.
-
-    private fun focusIntent(ctx: Context): PendingIntent = PendingIntent.getBroadcast(
-        ctx, 3, Intent(ctx, AlarmReceiver::class.java).setAction(ACTION_FOCUS),
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-    )
+    // ---------- Focus: the old entry points, now handled by the one focus engine (Focus.kt) ----------
 
     fun startFocus(ctx: Context, taskId: String, date: String, minutes: Int) {
-        stopFocus(ctx, true)   // only one timer at a time; whatever ran before is logged
-        val now = System.currentTimeMillis()
-        prefs(ctx).edit()
-            .putString("focusTask", taskId).putString("focusDate", date)
-            .putLong("focusStart", now).putLong("focusEnd", now + minutes * 60_000L)
-            .putInt("focusLength", minutes).apply()
-        schedule(ctx)
+        val d = try { LocalDate.parse(date) } catch (e: Exception) { LocalDate.now() }
+        Focus.start(ctx, Store.task(taskId), d, minutes, false)
     }
 
-    /**
-     * "Start my day": an open-ended timer on a task. It counts up, says so when the task's
-     * planned time is used up, and only stops when the task is paused or ticked.
-     */
-    fun startRun(ctx: Context, t: Task, d: LocalDate) {
-        stopFocus(ctx, true)
-        val now = System.currentTimeMillis()
-        val left = if (t.duration > 0) t.duration - t.worked(d) else 0
-        prefs(ctx).edit()
-            .putString("focusTask", t.id).putString("focusDate", d.toString())
-            .putLong("focusStart", now)
-            .putLong("focusEnd", if (left > 0) now + left * 60_000L else now + 24 * 3_600_000L)
-            .putBoolean("focusOpen", true)
-            .putBoolean("focusOver", left <= 0)   // nothing left to count down to: no "time is up" notice
-            .apply()
-        schedule(ctx)
-    }
+    /** "Start my day": until stopped, moving on to the next open task when one is ticked. */
+    fun startRun(ctx: Context, t: Task, d: LocalDate) = Focus.start(ctx, t, d, 0, true)
 
-    /** The task the timer is on right now, or null. */
-    fun runningTask(ctx: Context): Task? {
-        val p = prefs(ctx)
-        return if (p.getLong("focusEnd", 0L) > 0L) Store.task(p.getString("focusTask", "")) else null
-    }
+    fun runningTask(ctx: Context): Task? = Focus.task(ctx)
 
-    /** Whole minutes of the current timer that are not logged yet. */
-    fun runningMinutes(ctx: Context): Int {
-        val p = prefs(ctx)
-        if (p.getLong("focusEnd", 0L) == 0L) return 0
-        return ((System.currentTimeMillis() - p.getLong("focusStart", System.currentTimeMillis())) / 60_000L).toInt()
-    }
+    fun runningMinutes(ctx: Context): Int = Focus.unloggedMinutes(ctx)
 
-    /**
-     * A task was ticked. If the timer was on it, the time is logged; and while "my day" is
-     * running, the timer moves on to the next open task by itself.
-     */
-    fun taskTicked(ctx: Context, t: Task, d: LocalDate?) {
-        val p = prefs(ctx)
-        if (p.getLong("focusEnd", 0L) == 0L || p.getString("focusTask", "") != t.id) return
-        val open = p.getBoolean("focusOpen", false)
-        stopFocus(ctx, true)
-        if (!open || d == null || p.getString("dayRun", "") != d.toString()) return
-        val next = Store.queue(d).firstOrNull()
-        if (next != null) startRun(ctx, next, d) else p.edit().remove("dayRun").apply()
-    }
+    fun taskTicked(ctx: Context, t: Task, d: LocalDate?) = Focus.taskTicked(ctx, t, d)
 
-    /** Ends the session and returns the minutes it lasted. With `log`, they are added to the task. */
     fun stopFocus(ctx: Context, log: Boolean): Int {
-        val p = prefs(ctx)
-        val end = p.getLong("focusEnd", 0L)
-        if (end == 0L) return 0
-        // A countdown stops at its end; an open-ended run counts until now.
-        val until = if (p.getBoolean("focusOpen", false)) System.currentTimeMillis() else minOf(System.currentTimeMillis(), end)
-        val minutes = ((until - p.getLong("focusStart", end) + 30_000L) / 60_000L).toInt()
-        if (log && minutes > 0) {
-            Store.load(ctx)
-            val day = try {
-                LocalDate.parse(p.getString("focusDate", "") ?: "")
-            } catch (e: Exception) {
-                LocalDate.now()
-            }
-            Store.logFocus(Store.task(p.getString("focusTask", "")), day, minutes)
-            Store.save()
-        }
-        p.edit().remove("focusEnd").remove("focusStart").remove("focusOpen").remove("focusOver").apply()
-        ctx.getSystemService(AlarmManager::class.java)?.cancel(focusIntent(ctx))
-        return if (log) maxOf(minutes, 0) else 0
-    }
-
-    /** The session ran to its end: log it and, unless the timer screen is showing, say so. */
-    fun focusDone(ctx: Context, notify: Boolean) {
-        val p = prefs(ctx)
-        if (p.getLong("focusEnd", 0L) == 0L) return
-        Store.load(ctx)
-        val title = Store.task(p.getString("focusTask", ""))?.title ?: "Focus session"
-        val running = p.getBoolean("focusOpen", false)
-        if (running) {
-            // An open-ended run keeps going; it only says once that the planned time is used up.
-            if (p.getBoolean("focusOver", false)) return
-            p.edit().putBoolean("focusOver", true).apply()
-        }
-        val minutes = if (running) 0 else stopFocus(ctx, true)
-        if (!notify || !canNotify(ctx)) return
-        val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
-        channels(nm)
-        val open = Intent(ctx, MainActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        if (running) open.putExtra("day", true)
-        val n = Notification.Builder(ctx, CH_TASK)
-            .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle(if (running) "Planned time is up" else "Focus session done")
-            .setContentText(
-                if (running) "$title has used its planned time. Finish it, or keep going."
-                else "$minutes min on $title. Time for a break."
-            )
-            .setColor(ctx.getColor(R.color.accent))
-            .setContentIntent(
-                PendingIntent.getActivity(ctx, 3, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            )
-            .setAutoCancel(true)
-            .build()
-        nm.notify(3, n)
+        val minutes = (Focus.focusMs(ctx) / 60_000L).toInt()
+        Focus.stop(ctx, ask = log)
+        return minutes
     }
 
     private fun channels(nm: NotificationManager) {
@@ -260,18 +169,18 @@ object Reminders {
         val t = e.task
         if (e.kind == HABITS) {
             // Only if a habit planned for today is still unticked.
-            val left = Store.habits.items.filter { it.planned(e.date) && !it.ticked(e.date) }
+            val left = Store.habits.items.filter { it.remindAt == e.minutes && it.planned(e.date) && !it.ticked(e.date) && !e.date.isBefore(it.start) }
             if (left.isEmpty()) return
             open.putExtra("chains", true)
             val n = Notification.Builder(ctx, CH_DAILY)
                 .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle(if (left.size == 1) "Keep your chain going" else "Keep your chains going")
-                .setContentText("Not ticked yet today: " + left.joinToString(", ") { it.title })
+                .setContentText("Not linked yet today: " + left.joinToString(", ") { it.title })
                 .setColor(ctx.getColor(R.color.accent))
                 .setContentIntent(PendingIntent.getActivity(ctx, 5, open, flags))
                 .setAutoCancel(true)
                 .build()
-            nm.notify(5, n)
+            nm.notify(5000 + e.minutes, n)
             return
         }
         if (e.kind == EVENING) {
@@ -317,6 +226,7 @@ object Reminders {
         val done = Intent(ctx, AlarmReceiver::class.java).setAction(ACTION_DONE)
             .putExtra("task", t.id).putExtra("date", e.date.toString()).putExtra("nid", id)
         val parts = ArrayList<String>()
+        if (e.minutes > 0) parts.add("in " + beforeLabel(e.minutes))
         parts.add(fmtTime(t.time))
         if (t.duration > 0) parts.add(fmtDuration(t.duration))
         Store.category(t.categoryId)?.let { parts.add(it.name) }
@@ -344,7 +254,15 @@ object Reminders {
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
         if (intent.action == Reminders.ACTION_FOCUS) {
-            Reminders.focusDone(ctx, true)
+            // The focus session's next step is due: move it on and make sure its service runs.
+            Store.load(ctx)
+            Focus.tick(ctx)
+            if (Focus.active(ctx)) try {
+                ctx.startForegroundService(Intent(ctx, FocusService::class.java).setAction(Focus.ACTION_REFRESH))
+            } catch (e: Exception) {
+                // The notification is still there; the next alarm tries again.
+            }
+            Reminders.schedule(ctx)
         } else if (intent.action == Reminders.ACTION_DONE) {
             Store.load(ctx)
             val t = Store.task(intent.getStringExtra("task"))

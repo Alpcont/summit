@@ -214,6 +214,49 @@ object Sync {
         else -> v
     }
 
+    // ---------- Photos of course notes ----------
+    // A photo is a small JPEG file in the app's folder (photos/<id>.jpg). It travels as one document
+    // of its own (users/<account>/photos/<id>, about 200 KB) and is fetched only when a note needs it.
+
+    fun photoFile(ctx: Context, id: String): java.io.File =
+        java.io.File(java.io.File(ctx.filesDir, "photos").also { it.mkdirs() }, "$id.jpg")
+
+    fun uploadPhoto(ctx: Context, id: String) {
+        val uid = uid(ctx) ?: return
+        try {
+            val bytes = photoFile(ctx, id).readBytes()
+            userDoc(uid).collection("photos").document(id)
+                .set(mapOf("data" to com.google.firebase.firestore.Blob.fromBytes(bytes), "updated" to System.currentTimeMillis()))
+        } catch (e: Exception) {
+            lastError = e.message ?: "Photo not sent"
+        }
+    }
+
+    /** Gets a photo taken on the other device. `done(true)` once the file is here. */
+    fun fetchPhoto(ctx: Context, id: String, done: (Boolean) -> Unit) {
+        val uid = uid(ctx) ?: return done(false)
+        val app = ctx.applicationContext
+        userDoc(uid).collection("photos").document(id).get().addOnCompleteListener { task ->
+            val blob = if (task.isSuccessful) task.result?.getBlob("data") else null
+            if (blob == null) {
+                done(false)
+                return@addOnCompleteListener
+            }
+            try {
+                photoFile(app, id).writeBytes(blob.toBytes())
+                done(true)
+            } catch (e: Exception) {
+                done(false)
+            }
+        }
+    }
+
+    fun deletePhoto(ctx: Context, id: String) {
+        photoFile(ctx, id).delete()
+        val uid = uid(ctx) ?: return
+        userDoc(uid).collection("photos").document(id).delete()
+    }
+
     // ---------- Account ----------
 
     /** Shows Google's account chooser. `done` gets null on success, otherwise a message to show. */

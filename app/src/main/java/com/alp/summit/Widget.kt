@@ -35,11 +35,27 @@ open class TodayWidget : AppWidgetProvider() {
             }
             return
         }
+        if (intent.action == ACTION_LINK) {
+            // A flame on the small widget: link (or unlink) that habit for today.
+            Store.load(ctx)
+            val h = Store.habits.get(intent.getStringExtra("habit"))
+            val today = LocalDate.now()
+            if (h != null && h.linkable(today, today)) {
+                Store.linkHabit(h, today, !h.ticked(today))
+                Store.save()
+                Reminders.schedule(ctx)
+            }
+            return
+        }
         super.onReceive(ctx, intent)
     }
 
     companion object {
         const val ACTION_TOGGLE = "com.alp.summit.action.WIDGET_TOGGLE"
+        const val ACTION_LINK = "com.alp.summit.action.WIDGET_LINK"
+        private val HAB_SLOTS = intArrayOf(R.id.w_hab0, R.id.w_hab1, R.id.w_hab2, R.id.w_hab3, R.id.w_hab4, R.id.w_hab5)
+        private val HAB_ICONS = intArrayOf(R.id.w_habi0, R.id.w_habi1, R.id.w_habi2, R.id.w_habi3, R.id.w_habi4, R.id.w_habi5)
+        private val HAB_NUMS = intArrayOf(R.id.w_habn0, R.id.w_habn1, R.id.w_habn2, R.id.w_habn3, R.id.w_habn4, R.id.w_habn5)
 
         /** Redraws every Summit widget on the home screen. Does nothing if there is none. */
         fun refresh(ctx: Context) {
@@ -91,6 +107,26 @@ open class TodayWidget : AppWidgetProvider() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 .putExtra("date", today.toString())
             v.setOnClickPendingIntent(R.id.w_add, PendingIntent.getActivity(ctx, 6 + code, add, flags))
+
+            // Small widget: today's habits as flames under the tasks; a lit flame is linked.
+            val habits = if (important) Store.habits.items
+                .filter { it.planned(today) && !today.isBefore(it.start) }
+                .sortedWith(compareBy({ !it.marked }, { it.created })).take(HAB_SLOTS.size) else emptyList()
+            v.setViewVisibility(R.id.w_habits, if (habits.isEmpty()) View.GONE else View.VISIBLE)
+            for (i in HAB_SLOTS.indices) {
+                val h = habits.getOrNull(i)
+                v.setViewVisibility(HAB_SLOTS[i], if (h == null) View.GONE else View.VISIBLE)
+                if (h == null) continue
+                val linked = h.ticked(today)
+                val color = if (light) Look.deeper(h.color) else h.color
+                v.setInt(HAB_ICONS[i], "setColorFilter", color)
+                v.setInt(HAB_ICONS[i], "setImageAlpha", if (linked) 255 else 80)
+                v.setTextViewText(HAB_NUMS[i], h.streak(today).toString())
+                v.setTextColor(HAB_NUMS[i], if (linked) cPrimary else cDim)
+                v.setContentDescription(HAB_SLOTS[i], h.title + if (linked) ", linked today" else ", tap to link")
+                val link = Intent(ctx, kind).setAction(ACTION_LINK).putExtra("habit", h.id)
+                v.setOnClickPendingIntent(HAB_SLOTS[i], PendingIntent.getBroadcast(ctx, 40 + i, link, flags))
+            }
 
             if (Build.VERSION.SDK_INT >= 31) {
                 val items = RemoteViews.RemoteCollectionItems.Builder().setHasStableIds(true).setViewTypeCount(1)

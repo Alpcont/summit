@@ -56,6 +56,29 @@ object Courses {
         active().flatMap { c -> c.exams.filter { !it.date.isBefore(today) }.map { Pair(c, it) } }
             .sortedBy { it.second.date }
 
+    /**
+     * The exam chips on Today, counted from the day shown: "ECON 101 midterm in 3 days",
+     * "Exam today 09:00". Gone after the exam. Colour: (course colour, orange within 7 days, red within 2).
+     */
+    fun examChips(shown: LocalDate, today: LocalDate): List<Triple<Course, String, Int>> {
+        val out = ArrayList<Triple<Course, String, Int>>()
+        for (c in active()) for (e in c.exams.sortedBy { it.date }) {
+            if (e.date.isBefore(shown)) continue
+            // On the exam day itself, the chip goes once the exam is well over.
+            if (e.date == today && shown == today && e.time >= 0 && nowMinutes() > e.time + 180) continue
+            val n = ChronoUnit.DAYS.between(shown, e.date)
+            val name = c.code + " " + e.title.ifBlank { "exam" }
+            val at = if (e.time >= 0) " " + fmtTime(e.time) else ""
+            val text = when (n) {
+                0L -> c.code + ": exam today" + at
+                1L -> "$name tomorrow$at"
+                else -> "$name in $n days"
+            }
+            out.add(Triple(c, text, if (n > 7) 0 else if (n > 2) 1 else 2))
+        }
+        return out
+    }
+
     /** "today", "tomorrow", "in 5 days". */
     fun countdown(d: LocalDate, today: LocalDate): String {
         val n = ChronoUnit.DAYS.between(today, d)
@@ -74,7 +97,8 @@ object Courses {
     /** Something Summit offers to add as a task; one tap accepts or skips it. */
     class Suggestion(
         val course: Course, val key: String, val title: String, val date: LocalDate,
-        val time: Int, val duration: Int, val origin: String, val why: String
+        val time: Int, val duration: Int, val origin: String, val why: String,
+        val topics: List<String> = emptyList()      // from the exam's "Exam topics" notes
     )
 
     /** Study blocks for day `d`: one hour on each of the 5 days before an exam, in a free gap between 09:00 and 21:00. */
@@ -98,7 +122,8 @@ object Courses {
             out.add(
                 Suggestion(
                     c, key, "Study " + c.code, d, slot, STUDY_MINUTES, origin,
-                    c.code + " " + examName + " " + countdown(e.date, d) + " (" + shortDay(e.date) + ")"
+                    c.code + " " + examName + " " + countdown(e.date, d) + " (" + shortDay(e.date) + ")",
+                    examTopics(c.id, e.id)
                 )
             )
         }
@@ -144,6 +169,8 @@ object Courses {
         t.time = s.time
         t.duration = s.duration
         t.origin = s.origin
+        t.courseId = s.course.id
+        if (s.topics.isNotEmpty()) t.notes = "To study:\n" + s.topics.joinToString("\n") { "• $it" }
         Store.tasks.add(t)
         Store.save()
         Reminders.schedule(ctx)
@@ -353,12 +380,15 @@ class CoursesActivity : SheetActivity() {
         name.setPadding(dp(10), 0, 0, 0)
         head.addView(name, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         card.addView(head)
+        val (week, total) = Store.studyMinutes(c.id, today)
+        text(card, "Study time: " + minutesText(week) + " this week  ·  " + minutesText(total) + " total", 13f, R.color.text_secondary, 6)
 
         val exams = c.exams.sortedBy { it.date }
         for (e in exams) {
             val past = e.date.isBefore(today)
             val line = text(
-                card, (e.title.ifBlank { "Exam" }) + "  ·  " + shortDay(e.date) + "  ·  " + Courses.countdown(e.date, today),
+                card, (e.title.ifBlank { "Exam" }) + "  ·  " + shortDay(e.date) + (if (e.time >= 0) " " + fmtTime(e.time) else "") +
+                    "  ·  " + Courses.countdown(e.date, today),
                 15f, if (past) R.color.text_dim else R.color.text_primary, 8
             )
             line.setOnClickListener { editExam(c, e) }
@@ -401,15 +431,43 @@ class CoursesActivity : SheetActivity() {
             name.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             name.setText(e?.title ?: "")
             val box = LinearLayout(this)
+            box.orientation = LinearLayout.VERTICAL
             box.setPadding(dp(24), dp(8), dp(24), 0)
             box.addView(name, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            // Optional start time.
+            var time = e?.time ?: -1
+            val timeRow = FlowLayout(this)
+            timeRow.setPadding(0, dp(12), 0, 0)
+            box.addView(timeRow)
+            fun paintTime() {
+                timeRow.removeAllViews()
+                val pick = chip(if (time >= 0) "Starts " + fmtTime(time) else "Add a start time", time >= 0)
+                pick.setOnClickListener {
+                    val start = if (time >= 0) time else 9 * 60
+                    android.app.TimePickerDialog(this, R.style.AppDialog, { _, h, m ->
+                        time = h * 60 + m
+                        paintTime()
+                    }, start / 60, start % 60, true).show()
+                }
+                timeRow.addView(pick)
+                if (time >= 0) {
+                    val none = chip("No time", false)
+                    none.setOnClickListener {
+                        time = -1
+                        paintTime()
+                    }
+                    timeRow.addView(none)
+                }
+            }
+            paintTime()
             val b = AlertDialog.Builder(this)
                 .setTitle(c.code + " exam on " + shortDay(date))
                 .setView(box)
                 .setPositiveButton("Save") { _, _ ->
-                    if (e == null) c.exams.add(Exam(UUID.randomUUID().toString(), date, -1, name.text.toString().trim()))
+                    if (e == null) c.exams.add(Exam(UUID.randomUUID().toString(), date, time, name.text.toString().trim()))
                     else {
                         e.date = date
+                        e.time = time
                         e.title = name.text.toString().trim()
                     }
                     c.touch()

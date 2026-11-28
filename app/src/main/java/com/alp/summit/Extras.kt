@@ -110,6 +110,26 @@ class StatsActivity : SheetActivity() {
                 "   ·   All time: " + (if (all > 0) fmtDuration(all) else "none yet"), 15f, R.color.text_primary
         )
 
+        label(body, "Study time per course")
+        val studied = Courses.active()
+        if (studied.isEmpty()) text(body, "No courses yet (cap icon on Today).", 15f, R.color.text_dim)
+        for (c in studied) {
+            val (thisWeek, total) = Store.studyMinutes(c.id, today)
+            val line = text(body, c.code + "  ·  " + minutesText(thisWeek) + " this week  ·  " + minutesText(total) + " total", 15f, R.color.text_primary, 6)
+            line.setTextColor(Look.tone(c.color))
+        }
+
+        label(body, "Focus sessions this week")
+        val weekSessions = Store.sessions.items.filter { !it.day.isBefore(monday) }
+        if (weekSessions.isEmpty()) text(body, "None yet. Start one from the focus card on Today.", 15f, R.color.text_dim)
+        else {
+            val rated = weekSessions.filter { it.rating > 0 }
+            val tries = weekSessions.sumOf { it.blocked }
+            text(body, plural(weekSessions.size, "session") + "  ·  " + minutesText(weekSessions.sumOf { it.minutes }) +
+                (if (rated.isNotEmpty()) "  ·  focus " + String.format(java.util.Locale.ENGLISH, "%.1f", rated.map { it.rating }.average()) + " / 5" else "") +
+                "  ·  " + (if (tries == 1) "1 try" else "$tries tries") + " to open a blocked app", 15f, R.color.text_primary)
+        }
+
         label(body, "Categories this week")
         var any = false
         for (c in Store.categories) {
@@ -382,172 +402,5 @@ class PlanActivity : SheetActivity() {
             row.addView(c)
         }
         lists.addView(row)
-    }
-}
-
-// ---------- Focus timer ----------
-
-/** A countdown for one task. The minutes are added to the task when the session ends. */
-class FocusActivity : SheetActivity() {
-    private companion object {
-        const val READY = 0
-        const val RUNNING = 1
-        const val FINISHED = 2
-    }
-
-    private var task: Task? = null
-    private var date: LocalDate? = null
-    private var length = 25
-    private var state = -1
-    private var logged = 0
-    private lateinit var ring: RingView
-    private lateinit var chips: LinearLayout
-    private lateinit var cancel: TextView
-    private val handler = Handler(Looper.getMainLooper())
-    private val tick = object : Runnable {
-        override fun run() {
-            update()
-            handler.postDelayed(this, 500)
-        }
-    }
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setup("Focus")
-        val p = prefs(this)
-        if (p.getBoolean("focusOpen", false)) Reminders.stopFocus(this, true)   // "my day" was running: log it first
-        val running = p.getLong("focusEnd", 0L) > 0L
-        // A session that is already running wins over the task this screen was opened for.
-        task = Store.task(if (running) p.getString("focusTask", "") else intent.getStringExtra("id"))
-        date = (if (running) p.getString("focusDate", "") else intent.getStringExtra("date"))
-            ?.takeIf { it.isNotEmpty() }?.let { LocalDate.parse(it) }
-        length = p.getInt("focusLength", 25)
-
-        body.gravity = Gravity.CENTER_HORIZONTAL
-        val title = text(body, task?.title ?: "Focus session", 22f, R.color.text_primary, 12)
-        title.gravity = Gravity.CENTER
-        ring = RingView(this)
-        val lp = LinearLayout.LayoutParams(dp(250), dp(250))
-        lp.topMargin = dp(28)
-        lp.bottomMargin = dp(24)
-        body.addView(ring, lp)
-        chips = LinearLayout(this)
-        chips.orientation = LinearLayout.HORIZONTAL
-        body.addView(chips, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        cancel = text(body, "Stop without logging", 15f, R.color.text_secondary, 10)
-        cancel.gravity = Gravity.CENTER
-        cancel.setPadding(dp(12), dp(12), dp(12), dp(12))
-        cancel.setOnClickListener {
-            Reminders.stopFocus(this, false)
-            finish()
-        }
-        action.visibility = View.VISIBLE
-        update()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        handler.post(tick)
-    }
-
-    override fun onPause() {
-        super.onPause()
-        handler.removeCallbacks(tick)
-    }
-
-    private fun update() {
-        val p = prefs(this)
-        val now = System.currentTimeMillis()
-        var end = p.getLong("focusEnd", 0L)
-        if (end > 0L && now >= end) {
-            // Ran out while this screen is open: log it here, no notification needed.
-            Reminders.focusDone(this, false)
-            logged = p.getInt("focusLength", length)
-            end = 0L
-            show(FINISHED)
-        } else if (end > 0L) {
-            show(RUNNING)
-        } else if (state == RUNNING) {
-            logged = p.getInt("focusLength", length)   // ended by its alarm a moment ago
-            show(FINISHED)
-        } else if (state != FINISHED) {
-            show(READY)
-        }
-
-        when (state) {
-            READY -> {
-                ring.fraction = 1f
-                ring.label = String.format(Locale.ENGLISH, "%d:00", length)
-                ring.sub = "minutes of focus"
-            }
-            RUNNING -> {
-                val start = p.getLong("focusStart", now)
-                val left = (end - now).coerceAtLeast(0L)
-                ring.fraction = if (end > start) left.toFloat() / (end - start) else 0f
-                val seconds = (left + 999) / 1000
-                ring.label = String.format(Locale.ENGLISH, "%d:%02d", seconds / 60, seconds % 60)
-                val finish = java.time.Instant.ofEpochMilli(end).atZone(java.time.ZoneId.systemDefault()).toLocalTime()
-                ring.sub = "until " + fmtTime(finish.hour * 60 + finish.minute)
-            }
-            else -> {
-                ring.fraction = 0f
-                ring.label = "Done"
-                ring.sub = if (logged > 0) "$logged min logged" else "session ended"
-            }
-        }
-        ring.invalidate()
-    }
-
-    /** Switches buttons and choices when the timer moves from one state to the next. */
-    private fun show(next: Int) {
-        if (next == state) return
-        state = next
-        chips.removeAllViews()
-        chips.visibility = if (next == READY) View.VISIBLE else View.GONE
-        cancel.visibility = if (next == RUNNING) View.VISIBLE else View.GONE
-        val t = task
-        when (next) {
-            READY -> {
-                for (m in intArrayOf(15, 25, 45, 60)) {
-                    val c = chip("$m min", m == length)
-                    c.setOnClickListener {
-                        length = m
-                        state = -1
-                        update()
-                    }
-                    val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    lp.marginStart = dp(4)
-                    lp.marginEnd = dp(4)
-                    chips.addView(c, lp)
-                }
-                action.text = "Start"
-                action.setOnClickListener {
-                    Reminders.startFocus(this, t?.id ?: "", date?.toString() ?: "", length)
-                    update()
-                }
-            }
-            RUNNING -> {
-                action.text = "Finish now"
-                action.setOnClickListener {
-                    logged = Reminders.stopFocus(this, true)
-                    show(FINISHED)
-                    update()
-                }
-            }
-            else -> {
-                if (t != null && !t.isDone(date)) {
-                    action.text = "Mark task done"
-                    action.setOnClickListener {
-                        Store.setDone(t, date, true)
-                        Store.save()
-                        Reminders.schedule(this)
-                        finish()
-                    }
-                } else {
-                    action.text = "Close"
-                    action.setOnClickListener { finish() }
-                }
-            }
-        }
     }
 }
