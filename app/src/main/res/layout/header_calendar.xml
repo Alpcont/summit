@@ -20,6 +20,12 @@
             android:textSize="28sp" />
 
         <ImageButton
+            android:id="@+id/cal_menu"
+            style="@style/IconButton"
+            android:contentDescription="@string/day_menu"
+            android:src="@drawable/ic_more" />
+
+        <ImageButton
             android:id="@+id/cal_prev"
             style="@style/IconButton"
             android:contentDescription="@string/previous"
@@ -32,14 +38,21 @@
             android:src="@drawable/ic_next" />
     </LinearLayout>
 
-    <LinearLayout
-        android:id="@+id/cal_modes"
+    <!-- Month / Week / Day / Upcoming, and "Today": scrolls sideways on narrow screens. -->
+    <HorizontalScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
         android:layout_marginBottom="14dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal" />
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/cal_modes"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal" />
+    </HorizontalScrollView>
 
     <com.alp.summit.MonthGridView
         android:id="@+id/cal_grid"

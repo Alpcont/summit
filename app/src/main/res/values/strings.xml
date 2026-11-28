@@ -44,4 +44,6 @@
     <string name="block_service_description">Blocks other apps during a Summit focus session, except the ones you allow. Summit only sees which app opens, reads nothing inside apps and sends nothing anywhere.</string>
     <string name="widget_notes_label">Summit: notes</string>
     <string name="widget_notes_description">Notes pinned to today and your latest notes. Tap one to open it.</string>
+    <string name="day_menu">Day menu</string>
+    <string name="speak">Speak a task</string>
 </resources>

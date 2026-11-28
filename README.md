@@ -47,6 +47,23 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
   (minutes worked out of minutes planned; a ticked task counts in full). "Finish" ticks the
   task and the timer moves to the next one. The button pauses in between. When a task has
   used its planned time, you get a notification and the numbers turn red.
+- **Repeats**: on chosen weekdays, every N days, every N weeks on chosen weekdays, monthly on a
+  date (the last day in shorter months) or monthly on the 1st–4th or last weekday. Quick-add
+  understands "every 2 days", "every 2 weeks", "monthly", "every month on the 15th",
+  "last friday of the month".
+- **Day menu** (⋮ on Today, ⋮ in the Calendar for the selected day): **Auto-fill** (untimed open
+  tasks go into the free time between 09:00 and 22:00, never over an event or task; High
+  priority and tasks for a course with an exam within 7 days first; no duration = 30 min; a
+  preview first, then Undo), **Sort automatically** (also in a task's hold menu), **Apply a
+  routine**, **Save this day as a routine**. Today also shows an "Auto-fill my day" chip.
+- **Routines**: saved sets of tasks (time, duration, category, priority, subtasks, reminders).
+  Apply to any day from the day menu or the evening planning; manage them in Settings → Routines.
+- **Upcoming** (Calendar → Upcoming): the next 4 weeks by week: exams (with time, coloured by how
+  close), assignment sessions and deadlines, homework due, High priority tasks. Tap to open.
+- **Voice add**: the microphone in the quick-add bar and in the evening planning. Speak in
+  English; the words go into the bar so you see what quick-add understood before adding.
+- **Share into Summit**: share text, a link or pictures from any app to Summit: a new task (the
+  link stays in its notes) or a new note (Productivity or a course; pictures become photos).
 - **Reminders**: a task with a time can have several reminders at once (at the time, 10 min,
   30 min, 1 hour, 1 day before) plus "+ Custom" for any number of minutes, hours or days before.
 - **Duration**: in the task form, pick a preset or "Custom" for any hours and minutes.
@@ -86,7 +103,8 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
   Homework (due date; "Make it a task" adds it as a task for that course), Lecture notes (text,
   checklists and photos from the camera or gallery; photos are shrunk to about 200 KB and sync),
   Exam topics (linked to an exam; they show inside that exam's study suggestions) or a Note.
-  "Turn a line into a task" makes any line of a course note a task with one tap.
+  "Turn a line into a task" makes any line of a note a task with one tap; Productivity notes
+  can have photos too.
 - **Exams**: an optional start time. On Today the exam chips count from the day shown ("ECON 101
   midterm in 3 days", "exam today 09:00") and disappear after the exam; calm colour, orange within
   7 days, red within 2. The soonest exam comes first.
@@ -125,6 +143,11 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
   1–5 and how often you tried to open a blocked app. The **Focus** chain in Chains links itself on
   days you reach the goal. Focus minutes count toward the task and its course (study time on the
   Courses and Progress screens). **Focus widget**: one tap starts focus on the next open task.
+- **Evening reflection**: in the evening planning, "What went well today?" and "What will I do
+  differently tomorrow?" (optional), saved as a note pinned to the day, marked Reflection
+  (Settings → Evening reflection).
+- **What's new**: Notes → Developer → What's new lists every version; developer notes marked
+  Done are shown under the version they were solved in. Opens once after each update.
 - **Evening planning**: a nudge at 21:30 (changeable) opens a screen to set up tomorrow:
   add tasks, carry over what is still open, pull tasks from Someday, see notes pinned to
   tomorrow, and add a "Review … notes" task for each class you had today (or skip it).
@@ -150,6 +173,9 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
 2. **Done**: home-screen widget, streaks and stats, focus timer, smart quick-add, evening planning.
 3. **Done**: phone calendar events next to tasks; sync between phone and tablet (switched on
    in 3.2 with the Firebase file in the repo).
+7. **Done (5.2)**: auto-fill, sort automatically, routines, more repeats, Upcoming, voice add,
+   share into Summit, photos and lines in all notes, evening reflection, What's new, rename
+   subtasks in place. (5.1: notes widget, widget theme, exams soonest first.)
 6. **Done (5.0)**: course notebooks with photos, one focus engine (focus card, full screen,
    breaks, Do Not Disturb, app blocking, widget, ratings, focus chain, study time per course),
    exam times and countdown from the day shown.
@@ -163,9 +189,6 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
 - Backup to a file and restore.
 - Light theme.
 - Turkish words in quick-add ("yarın", "bugün").
-- Coming in 5.1: auto-fill my day, sort automatically again, routines, more repeat options,
-  upcoming view, voice add, share into Summit, evening reflection, changelog view, rename
-  subtask in place.
 - Not in 4.0 on purpose: auto-fill my day, energy hours, estimate check, routines, week
   templates, breaks, Do Not Disturb, share into Summit, score card.
 - A "hand in" task on an assignment's deadline; exam times (now only the date).

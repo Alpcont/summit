@@ -159,6 +159,23 @@ class SettingsActivity : Activity() {
         note(if (blocking) "During focus every other app shows Summit's block screen until the timer ends or you stop the session."
             else "Off: apps are not blocked. Tap App blocking for the steps to switch on Summit in Accessibility settings.")
 
+        label("Routines")
+        for (r in Store.routines.items.sortedBy { it.name.lowercase() }) {
+            row(r.name, plural(r.items.size, "task") + "  ›", 0) {
+                startActivity(Intent(this, RoutineActivity::class.java).putExtra("id", r.id))
+            }
+        }
+        row("New routine", "+", getColor(R.color.accent)) { startActivity(Intent(this, RoutineActivity::class.java)) }
+        note("A routine is a saved set of tasks. Apply it to a day from its menu (⋮ on Today or in the Calendar) or in the evening planning; save a day as a routine from the same menu.")
+
+        label("Evening reflection")
+        val reflect = p.getBoolean("reflectOn", true)
+        row("Reflection questions", if (reflect) "On" else "Off", if (reflect) getColor(R.color.accent) else 0) {
+            p.edit().putBoolean("reflectOn", !reflect).apply()
+            render()
+        }
+        note("Two optional questions in the evening planning, kept as a note pinned to that day.")
+
         label("Chains")
         val habitRemind = p.getBoolean("habitRemind", true)
         row("Habit reminder", if (habitRemind) "On" else "Off", if (habitRemind) getColor(R.color.accent) else 0) {

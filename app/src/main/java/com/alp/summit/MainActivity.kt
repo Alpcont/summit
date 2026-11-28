@@ -55,6 +55,7 @@ class MainActivity : Activity() {
         const val MONTH = 0
         const val WEEK = 1
         const val DAY = 2
+        const val UPCOMING = 3
 
         // What a finger on a task line is doing.
         const val IDLE = 0
@@ -159,6 +160,7 @@ class MainActivity : Activity() {
         })
         findViewById<View>(R.id.quick_add).setOnClickListener { quickAdd() }
         findViewById<View>(R.id.quick_more).setOnClickListener { openEditor(null, input.text.toString().trim()) }
+        findViewById<View>(R.id.quick_mic).setOnClickListener { listen(this, 51) }
         input.setOnEditorActionListener { _, action, _ ->
             if (action == EditorInfo.IME_ACTION_DONE) {
                 quickAdd()
@@ -242,6 +244,7 @@ class MainActivity : Activity() {
         Focus.listeners.remove(focusListener)
         Focus.listeners.add(focusListener)
         Focus.askRating(this)
+        showWhatsNewOnce(this)
         Reminders.schedule(this)
         if (openPlan) {
             openPlan = false
@@ -249,6 +252,18 @@ class MainActivity : Activity() {
         } else {
             maybeReview()
         }
+    }
+
+    /** Spoken text goes into the quick-add bar, so its preview shows before anything is added. */
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 51 || resultCode != RESULT_OK) return
+        val said = heard(data) ?: return
+        input.setText(said)
+        input.setSelection(input.text.length)
+        input.requestFocus()
     }
 
     /** Esc on a keyboard always leads back to the Today page. */
@@ -457,6 +472,10 @@ class MainActivity : Activity() {
             (c.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8)
         }
         if (!isToday) topChip(chip("Back to today", true)) { goTo(today) }
+        if (!day.isBefore(today) && Store.on(day).any { !it.isDone(day) && it.time < 0 && !it.repeating }) {
+            topChip(chip("Auto-fill my day", false)) { autoFill(day) }
+        }
+        h.findViewById<View>(R.id.btn_day_menu).setOnClickListener { dayMenu(it, day) }
         // Exams count from the day shown, and get more urgent as they come closer.
         for ((course, text, urgency) in Courses.examChips(day, today)) {
             val tint = when (urgency) {
@@ -556,10 +575,15 @@ class MainActivity : Activity() {
         h.findViewById<TextView>(R.id.cal_title).text = when (calMode) {
             WEEK -> weekTitle(monday)
             DAY -> if (selected == today) "Today" else shortDay(selected)
+            UPCOMING -> "Next 4 weeks"
             else -> monthYear(month.atDay(1))
         }
         h.findViewById<View>(R.id.cal_prev).setOnClickListener { shift(-1) }
         h.findViewById<View>(R.id.cal_next).setOnClickListener { shift(1) }
+        h.findViewById<View>(R.id.cal_menu).setOnClickListener { dayMenu(it, selected) }
+        if (calMode == UPCOMING) for (id in intArrayOf(R.id.cal_prev, R.id.cal_next, R.id.cal_menu, R.id.cal_grid)) {
+            h.findViewById<View>(id).visibility = View.GONE
+        }
 
         val modes = h.findViewById<LinearLayout>(R.id.cal_modes)
         fun mode(label: String, on: Boolean, action: () -> Unit) {
@@ -571,9 +595,8 @@ class MainActivity : Activity() {
         mode("Month", calMode == MONTH) { setMode(MONTH) }
         mode("Week", calMode == WEEK) { setMode(WEEK) }
         mode("Day", calMode == DAY) { setMode(DAY) }
-        val spacer = View(this)
-        modes.addView(spacer, LinearLayout.LayoutParams(0, 1, 1f))
-        if (selected != today || YearMonth.from(today) != month) {
+        mode("Upcoming", calMode == UPCOMING) { setMode(UPCOMING) }
+        if (calMode != UPCOMING && (selected != today || YearMonth.from(today) != month)) {
             mode("Today", false) {
                 selected = today
                 month = YearMonth.from(today)
@@ -601,7 +624,9 @@ class MainActivity : Activity() {
             for ((d, tv) in scores) tv.text = scoreText(d)
         }
 
-        if (calMode == DAY) {
+        if (calMode == UPCOMING) {
+            renderUpcoming(list, today)
+        } else if (calMode == DAY) {
             renderDay()
         } else if (calMode == MONTH) {
             list.addView(dayHeading(selected, true))
@@ -652,6 +677,7 @@ class MainActivity : Activity() {
 
     /** Arrows and swipes: one month, one week or one day (a swipe on the week strip passes 7 days). */
     private fun shift(dir: Int) {
+        if (calMode == UPCOMING) return
         when (calMode) {
             WEEK -> selected = selected.plusWeeks(dir.toLong())
             DAY -> selected = selected.plusDays(dir.toLong())
@@ -741,6 +767,14 @@ class MainActivity : Activity() {
         // Tasks without a time: a row on top. Hold one and drag it into the day to give it a time.
         val all = Store.on(d)
         val loose = all.filter { it.time < 0 }
+        if (!d.isBefore(today) && loose.any { !it.isDone(d) && !it.repeating }) {
+            // Give the untimed tasks a place in the free time.
+            val fill = chip("Auto-fill the free time", true)
+            fill.setOnClickListener { autoFill(d) }
+            val fl = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            fl.topMargin = dp(14)
+            list.addView(fill, fl)
+        }
         if (loose.isNotEmpty()) {
             val label = TextView(this)
             label.text = "No time yet  ·  hold one and drag it into the day"
@@ -1242,7 +1276,7 @@ class MainActivity : Activity() {
         Store.courseOf(t)?.let { part(it.code, Look.tone(it.color)) }
         if (cat != null) part(cat.name, Look.tone(cat.color))
         Store.habits.get(t.habitId)?.let { part("Chain: " + it.title, Look.tone(it.color)) }
-        if (t.repeating) part(repeatLabel(t.repeatMask))
+        if (t.repeating) part(t.repeatText())
         if (t.subtasks.isNotEmpty()) {
             val ticked = t.subtasks.count { t.subKey(d, it) in t.subDone }
             part("$ticked/${t.subtasks.size}")
@@ -1295,6 +1329,7 @@ class MainActivity : Activity() {
         val m = PopupMenu(this, r.inner, Gravity.END)
         m.menu.add(0, 1, 0, "Edit")
         if (!t.isDone(d)) m.menu.add(0, 8, 0, "Start focus timer")
+        if (d != null && Planner.hasOwnOrder(d)) m.menu.add(0, 9, 0, "Sort automatically")
         if (t.repeating && d != null) {
             m.menu.add(0, 5, 0, "Skip this day")
             m.menu.add(0, 6, 0, "Delete all repeats")
@@ -1320,10 +1355,54 @@ class MainActivity : Activity() {
                 8 -> startActivity(
                     Intent(this, FocusActivity::class.java).putExtra("id", t.id).putExtra("date", d?.toString() ?: "")
                 )
+                9 -> if (d != null) sortDay(d)
             }
             true
         }
         m.show()
+    }
+
+    // ---------- The day's menu: auto-fill, sort, routines ----------
+
+    private fun dayMenu(anchor: View, d: LocalDate) {
+        val m = PopupMenu(this, anchor, Gravity.END)
+        if (!d.isBefore(today)) m.menu.add(0, 1, 0, "Auto-fill " + relDayInline(d, today))
+        if (Planner.hasOwnOrder(d)) m.menu.add(0, 2, 0, "Sort automatically")
+        m.menu.add(0, 3, 0, "Apply a routine…")
+        m.menu.add(0, 4, 0, "Save this day as a routine")
+        m.setOnMenuItemClickListener {
+            when (it.itemId) {
+                1 -> autoFill(d)
+                2 -> sortDay(d)
+                3 -> pickRoutine(d) { r, made ->
+                    renderMoving()
+                    offerUndo("Added " + r.name + " for " + relDayInline(d, today)) { Store.tasks.removeAll(made.toSet()) }
+                }
+                4 -> saveDayAsRoutine(d)
+            }
+            true
+        }
+        m.show()
+    }
+
+    /** Preview first; after Accept the Undo bar can take it back. */
+    private fun autoFill(d: LocalDate) {
+        Planner.preview(this, d, today) { placed ->
+            act("Auto-filled " + plural(placed.size, "task"), { for (p in placed) p.task.time = -1 }) {
+                val now = System.currentTimeMillis()
+                for (p in placed) {
+                    p.task.time = p.time
+                    p.task.updated = now
+                }
+            }
+        }
+    }
+
+    /** Back to the normal order (time, then priority), with Undo. */
+    private fun sortDay(d: LocalDate) {
+        val before = Store.on(d).filter { it.rank >= 0 }.map { Pair(it, it.rank) }
+        if (before.isEmpty()) return
+        act("Sorted automatically", { for ((t, r) in before) t.rank = r }) { Planner.sortTasks(d) }
     }
 
     // ---------- Changes that can be undone ----------
@@ -1331,12 +1410,14 @@ class MainActivity : Activity() {
     private fun moveTo(t: Task, target: LocalDate?) {
         val date = t.date
         val mask = t.repeatMask
+        val rule = t.repeatRule
         val end = t.endDate
         val rank = t.rank
         val where = if (target == null) "Someday" else relDayInline(target, today)
         act("Moved to $where", {
             t.date = date
             t.repeatMask = mask
+            t.repeatRule = rule
             t.endDate = end
             t.rank = rank
         }) { Store.move(t, target) }
@@ -1547,6 +1628,7 @@ class MainActivity : Activity() {
         if (p.priority != 0) t.priority = p.priority
         t.categoryId = if (p.categoryId.isNotEmpty()) p.categoryId else if (tab == 0) filter else ""
         t.repeatMask = p.repeatMask
+        t.repeatRule = p.repeatRule
         Store.tasks.add(t)
         Store.save()
         Reminders.schedule(this)

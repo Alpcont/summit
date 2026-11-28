@@ -37,6 +37,7 @@ class EditTaskActivity : Activity() {
     private var time = -1
     private val reminds = java.util.TreeSet<Int>()   // minutes before; empty = no reminder
     private var mask = 0
+    private var rule = ""        // see Task.repeatRule
     private var duration = 0
     private var priority = 2
     private var category = ""
@@ -68,6 +69,7 @@ class EditTaskActivity : Activity() {
             time = t.time
             reminds.addAll(t.reminders())
             mask = t.repeatMask
+            rule = t.repeatRule
             duration = t.duration
             priority = t.priority
             category = t.categoryId
@@ -158,12 +160,7 @@ class EditTaskActivity : Activity() {
         val showRepeat = date != null
         findViewById<View>(R.id.label_repeat).visibility = if (showRepeat) View.VISIBLE else View.GONE
         repeatRow.visibility = if (showRepeat) View.VISIBLE else View.GONE
-        val letters = arrayOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-        for (i in 0 until 7) {
-            val bit = 1 shl i
-            add(repeatRow, letters[i], mask and bit != 0) { mask = mask xor bit }
-        }
-        add(repeatRow, "Every day", mask == 127) { mask = if (mask == 127) 0 else 127 }
+        repeatChips(repeatRow)
 
         val durationRow = findViewById<FlowLayout>(R.id.duration_chips)
         durationRow.removeAllViews()
@@ -218,10 +215,23 @@ class EditTaskActivity : Activity() {
             val line = LinearLayout(this)
             line.orientation = LinearLayout.HORIZONTAL
             line.gravity = Gravity.CENTER_VERTICAL
-            val name = TextView(this)
-            name.text = s.title
+            // Tap the text to change it right here.
+            val name = EditText(this)
+            name.setText(s.title)
             name.textSize = 15f
+            name.background = null
+            name.setPadding(0, dp(8), 0, dp(8))
+            name.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            name.imeOptions = EditorInfo.IME_ACTION_DONE
             name.setTextColor(getColor(R.color.text_primary))
+            name.addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(t: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(t: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(e: android.text.Editable?) {
+                    val v = e?.toString()?.trim() ?: ""
+                    if (v.isNotEmpty()) s.title = v
+                }
+            })
             line.addView(name, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             val remove = ImageButton(this)
             remove.setImageResource(R.drawable.ic_close)
@@ -234,6 +244,74 @@ class EditTaskActivity : Activity() {
             }
             line.addView(remove, LinearLayout.LayoutParams(dp(44), dp(44)))
             subList.addView(line)
+        }
+    }
+
+    /**
+     * The repeat choices: how (weekdays, every N days, every N weeks, a monthly date, a monthly
+     * weekday), then the details of that choice.
+     */
+    private fun repeatChips(row: FlowLayout) {
+        val letters = arrayOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+        val start = date ?: today
+        val kind = if (mask == 0) "off" else rule.substringBefore(':').ifEmpty { "weekly" }
+        val parts = rule.split(':')
+        val n = parts.getOrNull(1)?.toIntOrNull() ?: 2
+        add(row, "No repeat", kind == "off") { mask = 0; rule = "" }
+        add(row, "Weekly", kind == "weekly") { mask = 1 shl (start.dayOfWeek.value - 1); rule = "" }
+        add(row, "Every N days", kind == "d") { mask = 127; rule = "d:2" }
+        add(row, "Every N weeks", kind == "w") { mask = 1 shl (start.dayOfWeek.value - 1); rule = "w:2" }
+        add(row, "Monthly on a date", kind == "md") { mask = 127; rule = "md:" + start.dayOfMonth }
+        add(row, "Monthly on a weekday", kind == "mw") {
+            mask = 127
+            val nth = if (start.plusWeeks(1).month != start.month) -1 else (start.dayOfMonth - 1) / 7 + 1
+            rule = "mw:$nth:" + start.dayOfWeek.value
+        }
+        // A thin divider, then the details.
+        val gap = View(this)
+        row.addView(gap, ViewGroup.LayoutParams(dp(2000), dp(1)))
+        fun stepper(prefix: String, value: Int, min: Int, max: Int, set: (Int) -> Unit) {
+            add(row, "−", false) { set((value - 1).coerceAtLeast(min)) }
+            val mid = chip("$prefix $value", true)
+            row.addView(mid)
+            add(row, "+", false) { set((value + 1).coerceAtMost(max)) }
+        }
+        when (kind) {
+            "weekly" -> {
+                for (i in 0 until 7) {
+                    val bit = 1 shl i
+                    add(row, letters[i], mask and bit != 0) { if (mask xor bit != 0) mask = mask xor bit }
+                }
+                add(row, "Every day", mask == 127) { mask = 127 }
+                add(row, "Weekdays", mask == 31) { mask = 31 }
+            }
+            "d" -> stepper("Every", n, 2, 365) { rule = "d:$it" }
+            "w" -> {
+                stepper("Every", n, 2, 52) { rule = "w:$it" }
+                for (i in 0 until 7) {
+                    val bit = 1 shl i
+                    add(row, letters[i], mask and bit != 0) { if (mask xor bit != 0) mask = mask xor bit }
+                }
+            }
+            "md" -> {
+                val dom = parts.getOrNull(1)?.toIntOrNull() ?: start.dayOfMonth
+                stepper("On the", dom, 1, 31) { rule = "md:$it" }
+            }
+            "mw" -> {
+                val nth = parts.getOrNull(1)?.toIntOrNull() ?: 1
+                val dow = parts.getOrNull(2)?.toIntOrNull() ?: start.dayOfWeek.value
+                for ((label, v) in listOf("1st" to 1, "2nd" to 2, "3rd" to 3, "4th" to 4, "Last" to -1)) {
+                    add(row, label, nth == v) { rule = "mw:$v:$dow" }
+                }
+                for (i in 0 until 7) add(row, letters[i], dow == i + 1) { rule = "mw:$nth:" + (i + 1) }
+            }
+        }
+        if (kind != "off") {
+            val words = TextView(this)
+            words.text = ruleText(rule, mask, start) + (if (kind == "md") "  (the last day in shorter months)" else "")
+            words.textSize = 13f
+            words.setTextColor(getColor(R.color.text_secondary))
+            row.addView(words, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
     }
 
@@ -371,6 +449,7 @@ class EditTaskActivity : Activity() {
         t.moreReminds.clear()
         t.moreReminds.addAll(reminds.drop(1))
         t.repeatMask = if (date == null) 0 else mask
+        t.repeatRule = if (date == null || mask == 0) "" else rule
         if (!t.repeating) t.endDate = null
         t.duration = duration
         t.priority = priority

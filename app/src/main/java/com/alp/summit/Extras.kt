@@ -218,6 +218,13 @@ class PlanActivity : SheetActivity() {
             } else false
         }
         bar.addView(input, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val mic = ImageButton(this)
+        mic.setImageResource(R.drawable.ic_mic)
+        mic.setColorFilter(getColor(R.color.text_secondary))
+        mic.background = null
+        mic.contentDescription = "Speak a task"
+        mic.setOnClickListener { listen(this, 52) }
+        bar.addView(mic, LinearLayout.LayoutParams(dp(40), dp(40)))
         val plus = ImageButton(this)
         plus.setImageResource(R.drawable.ic_up)
         plus.setColorFilter(getColor(R.color.on_accent))
@@ -228,15 +235,103 @@ class PlanActivity : SheetActivity() {
         val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         lp.topMargin = dp(18)
         body.addView(bar, lp)
+        // What smart quick-add understood (also for spoken tasks), before anything is added.
+        val preview = text(body, "", 13f, R.color.accent, 6)
+        preview.visibility = View.GONE
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val sum = parseQuick(s?.toString() ?: "", today, Store.categories).summary(today)
+                preview.text = sum
+                preview.visibility = if (sum.isEmpty()) View.GONE else View.VISIBLE
+            }
+        })
 
         lists = LinearLayout(this)
         lists.orientation = LinearLayout.VERTICAL
         body.addView(lists)
+        if (prefs(this).getBoolean("reflectOn", true)) reflection()
 
         action.visibility = View.VISIBLE
         action.text = "Done"
         action.setOnClickListener { finish() }
         render()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 52 || resultCode != RESULT_OK) return
+        val said = heard(data) ?: return
+        input.setText(said)
+        input.setSelection(input.text.length)
+    }
+
+    // ----- Evening reflection: two optional questions, kept as a note pinned to today -----
+
+    private val Q1 = "What went well today?"
+    private val Q2 = "What will I do differently tomorrow?"
+    private var well: EditText? = null
+    private var better: EditText? = null
+
+    private fun reflectionNote(): Note? = Store.notes.items.firstOrNull { it.kind == "reflection" && it.pin == today }
+
+    private fun reflection() {
+        label(body, "Reflection  ·  optional")
+        val existing = reflectionNote()?.text ?: ""
+        fun answer(q: String): String {
+            val i = existing.indexOf(q)
+            if (i < 0) return ""
+            val rest = existing.substring(i + q.length)
+            val end = listOf(Q1, Q2).map { rest.indexOf(it) }.filter { it >= 0 }.minOrNull() ?: rest.length
+            return rest.substring(0, end).trim()
+        }
+        fun field(q: String): EditText {
+            text(body, q, 15f, R.color.text_primary, 8)
+            val e = EditText(this)
+            e.textSize = 15f
+            e.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            e.setTextColor(getColor(R.color.text_primary))
+            e.setHintTextColor(getColor(R.color.text_dim))
+            e.hint = "A sentence is enough (or skip it)"
+            e.background = rounded(getColor(R.color.surface), dp(14))
+            e.setPadding(dp(14), dp(12), dp(14), dp(12))
+            e.setText(answer(q))
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp(6)
+            body.addView(e, lp)
+            return e
+        }
+        well = field(Q1)
+        better = field(Q2)
+        text(body, "Saved as a Productivity note pinned to today, marked Reflection.", 12f, R.color.text_dim, 6)
+    }
+
+    /** Keeps the answers (only if something was written). */
+    private fun saveReflection() {
+        val a = well?.text?.toString()?.trim() ?: return
+        val b = better?.text?.toString()?.trim() ?: ""
+        val n = reflectionNote()
+        if (a.isEmpty() && b.isEmpty() && n == null) return
+        val textNow = "$Q1\n$a\n\n$Q2\n$b"
+        if (n != null && n.text == textNow) return
+        val note = n ?: Note().also {
+            it.kind = "reflection"
+            it.pin = today
+            it.title = "Reflection · " + shortDay(today)
+            Store.notes.add(it)
+        }
+        note.text = textNow
+        note.touch()
+        Store.save()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        saveReflection()
     }
 
     private fun add() {
@@ -251,6 +346,7 @@ class PlanActivity : SheetActivity() {
         if (p.priority != 0) t.priority = p.priority
         t.categoryId = p.categoryId
         t.repeatMask = p.repeatMask
+        t.repeatRule = p.repeatRule
         Store.tasks.add(t)
         changed()
         input.setText("")
@@ -370,6 +466,23 @@ class PlanActivity : SheetActivity() {
             }
         }
 
+        // Routines: one tap adds a routine's tasks to tomorrow.
+        val routines = Store.routines.items.sortedBy { it.name.lowercase() }
+        if (routines.isNotEmpty()) {
+            label(lists, "Routines for tomorrow")
+            val flow = FlowLayout(this)
+            for (r in routines) {
+                val c = chip(r.name, false)
+                c.setOnClickListener {
+                    r.apply(tomorrow)
+                    changed()
+                    android.widget.Toast.makeText(this, r.name + " added to tomorrow", android.widget.Toast.LENGTH_SHORT).show()
+                }
+                flow.addView(c)
+            }
+            lists.addView(flow)
+        }
+
         val someday = Store.someday().filter { !it.done }.take(8)
         if (someday.isNotEmpty()) {
             label(lists, "From Someday")
@@ -393,7 +506,7 @@ class PlanActivity : SheetActivity() {
         if (t.time >= 0) parts.add(fmtTime(t.time))
         if (t.duration > 0) parts.add(fmtDuration(t.duration))
         Store.category(t.categoryId)?.let { parts.add(it.name) }
-        if (t.repeating) parts.add(repeatLabel(t.repeatMask))
+        if (t.repeating) parts.add(t.repeatText())
         if (parts.isNotEmpty()) text(words, parts.joinToString("  ·  "), 13f, R.color.text_secondary, 1)
         row.addView(words, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         if (button != null) {
