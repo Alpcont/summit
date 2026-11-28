@@ -85,7 +85,7 @@ class MainActivity : Activity() {
             val tick = dayTick ?: return
             tick()
             // Every second while a timer runs (for its clock), otherwise just often enough for the "now" line.
-            list.postDelayed(this, if (prefs(this@MainActivity).getLong("focusEnd", 0L) > 0L) 1000L else 20000L)
+            list.postDelayed(this, if (Focus.active(this@MainActivity)) 1000L else 20000L)
         }
     }
     private var filter = ""                          // category shown on Today, "" = all
@@ -237,6 +237,9 @@ class MainActivity : Activity() {
         // Changes from the other device slide into place while the app is open.
         Sync.onRemoteChange = { if (!gestureActive) renderMoving() }
         celebrateBadge()
+        Focus.listeners.remove(focusListener)
+        Focus.listeners.add(focusListener)
+        Focus.askRating(this)
         Reminders.schedule(this)
         if (openPlan) {
             openPlan = false
@@ -324,8 +327,12 @@ class MainActivity : Activity() {
         }
     }
 
+    // Redraw when the focus session changes elsewhere (notification, widget, full screen).
+    private val focusListener: () -> Unit = { list.post { if (!gestureActive) render() } }
+
     override fun onPause() {
         super.onPause()
+        Focus.listeners.remove(focusListener)
         Sync.onRemoteChange = null
         list.removeCallbacks(ticker)
     }
@@ -448,8 +455,14 @@ class MainActivity : Activity() {
             (c.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(8)
         }
         if (!isToday) topChip(chip("Back to today", true)) { goTo(today) }
-        for ((course, exam) in Courses.upcomingExams(today)) {
-            topChip(chip(course.code + " exam  ·  " + Courses.countdown(exam.date, today), false, Look.tone(course.color))) {
+        // Exams count from the day shown, and get more urgent as they come closer.
+        for ((course, text, urgency) in Courses.examChips(day, today)) {
+            val tint = when (urgency) {
+                0 -> Look.tone(course.color)
+                1 -> getColor(R.color.accent)
+                else -> getColor(R.color.danger)
+            }
+            topChip(chip(text, urgency > 0, tint)) {
                 startActivity(Intent(this, CoursesActivity::class.java))
             }
         }
@@ -490,21 +503,10 @@ class MainActivity : Activity() {
         }
 
         val p = prefs(this)
-        val focusEnd = p.getLong("focusEnd", 0L)
-        if (isToday && (focusEnd > System.currentTimeMillis() || (focusEnd > 0L && p.getBoolean("focusOpen", false)))) {
-            val focus = h.findViewById<TextView>(R.id.focus_banner)
-            val until = java.time.Instant.ofEpochMilli(focusEnd).atZone(java.time.ZoneId.systemDefault()).toLocalTime()
-            focus.visibility = View.VISIBLE
-            if (p.getBoolean("focusOpen", false)) {
-                focus.text = "Timer running: " + (Reminders.runningTask(this)?.title ?: "task") + "  ·  Open"
-                focus.setOnClickListener {
-                    showDay()
-                    render(PAGE)
-                }
-            } else {
-                focus.text = "Focus running until " + fmtTime(until.hour * 60 + until.minute) + "  ·  Open"
-                focus.setOnClickListener { startActivity(Intent(this, FocusActivity::class.java)) }
-            }
+        // The focus card, under the mountain (today only).
+        if (isToday) {
+            val hl = h as LinearLayout
+            hl.addView(focusCard(today) { render() }, hl.indexOfChild(h.findViewById(R.id.focus_banner)))
         }
         val nowMinutes = LocalTime.now().hour * 60 + LocalTime.now().minute
         if (isToday && p.getBoolean("evening", true) && nowMinutes >= p.getInt("eveningTime", 21 * 60 + 30) &&
@@ -812,34 +814,30 @@ class MainActivity : Activity() {
             if (step != 0) scroll.scrollBy(0, step)
             scroll.scrollY - before
         }
+        // The play buttons and "Start my day" use the one focus engine (Focus.kt).
         timeline.onPlay = { t ->
-            if (Reminders.runningTask(this) === t) {
-                Reminders.stopFocus(this, true)
+            if (Focus.task(this) === t) {
+                if (Focus.paused(this)) Focus.resume(this) else Focus.pause(this)
             } else {
-                p.edit().putString("dayRun", today.toString()).apply()
-                Reminders.startRun(this, t, today)
+                beginFocus(t, today, 0, true) { render() }
             }
             render()
         }
         start.setOnClickListener {
-            if (p.getLong("focusEnd", 0L) > 0L) {
-                Reminders.stopFocus(this, true)              // pause: the minutes so far are kept
-            } else {
-                val next = Store.queue(today).firstOrNull() ?: return@setOnClickListener
-                p.edit().putString("dayRun", today.toString()).apply()
-                Reminders.startRun(this, next, today)
+            when {
+                Focus.active(this) && Focus.paused(this) -> Focus.resume(this)
+                Focus.active(this) && !Focus.onBreak(this) -> Focus.pause(this)   // the minutes so far are kept
+                !Focus.active(this) -> {
+                    val next = Store.queue(today).firstOrNull() ?: return@setOnClickListener
+                    beginFocus(next, today, 0, true) { render() }
+                }
             }
             start.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
             render()
         }
         finish.setOnClickListener {
             val t = Reminders.runningTask(this) ?: return@setOnClickListener
-            val day = try {
-                LocalDate.parse(p.getString("focusDate", "") ?: "")
-            } catch (e: Exception) {
-                today
-            }
-            setDone(t, day, true)
+            setDone(t, Focus.date(this), true)
         }
 
         // Numbers that move: refreshed by the ticker, every second while a timer runs.
@@ -848,7 +846,6 @@ class MainActivity : Activity() {
             val nowMin = now.hour * 60 + now.minute
             val running = Reminders.runningTask(this)
             val extra = Reminders.runningMinutes(this)
-            val sessionStart = p.getLong("focusStart", 0L)
             timeline.runningId = running?.id ?: ""
             timeline.runningExtra = extra
             timeline.nowMinutes = if (isToday) nowMin else -1
@@ -863,8 +860,7 @@ class MainActivity : Activity() {
                 nowTitle.text = weekdayName(d) + " " + dayMonth(d)
                 nowSub.text = plural(all.size, "task") + "  ·  " + all.count { it.time >= 0 } + " with a time"
             } else if (running != null) {
-                val seconds = ((System.currentTimeMillis() - sessionStart) / 1000L).coerceAtLeast(0L)
-                val clock = String.format(java.util.Locale.ENGLISH, "%d:%02d", seconds / 60, seconds % 60)
+                val clock = (if (Focus.onBreak(this)) "Break " else if (Focus.paused(this)) "Paused " else "") + Focus.clock(this)
                 val worked = running.worked(today) + extra
                 nowTitle.text = "Now: " + running.title
                 if (running.duration > 0) {
@@ -940,6 +936,17 @@ class MainActivity : Activity() {
         why.setTextColor(getColor(R.color.text_secondary))
         why.setPadding(0, dp(2), 0, dp(10))
         card.addView(why)
+        // What to study: the exam's topics from the course notebook.
+        if (sg.topics.isNotEmpty()) {
+            val topics = TextView(this)
+            topics.text = "To study:\n" + sg.topics.take(8).joinToString("\n") { "•  $it" } +
+                (if (sg.topics.size > 8) "\n…and ${sg.topics.size - 8} more" else "")
+            topics.textSize = 14f
+            topics.setLineSpacing(dp(2).toFloat(), 1f)
+            topics.setTextColor(getColor(R.color.text_primary))
+            topics.setPadding(0, 0, 0, dp(10))
+            card.addView(topics)
+        }
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         val accept = chip("Accept", true, color)

@@ -10,6 +10,39 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- A firm double click when a habit is linked. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Focus: keeps the session running with the screen off, and Do Not Disturb during it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+
+    <!-- Focus app blocking: the installed apps to choose from, the home screen, browser, PDF, phone and clock apps. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/pdf" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SHOW_ALARMS" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+    </queries>
     <!-- Optional: show the phone calendar's events next to tasks (read only, asked for in Settings). -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
 
@@ -80,6 +113,63 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation"
             android:exported="false"
             android:windowSoftInputMode="adjustResize|stateHidden" />
+
+        <activity
+            android:name=".BlockActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.alp.summit.block" />
+
+        <activity
+            android:name=".AllowedAppsActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:exported="false" />
+
+        <!-- Focus session: runs as a foreground service so it keeps going with the screen off. -->
+        <service
+            android:name=".FocusService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Focus timer the user starts: shows the time left, breaks and Pause/Stop." />
+        </service>
+
+        <!-- App blocking during focus (switched on by the user in Accessibility settings). -->
+        <service
+            android:name=".BlockService"
+            android:exported="false"
+            android:label="@string/block_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/block_service" />
+        </service>
+
+        <!-- The camera saves lecture-note photos through this (no storage permission needed). -->
+        <provider
+            android:name=".PhotoProvider"
+            android:authorities="com.alp.summit.photos"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
+        <!-- Focus widget: start focus with one tap. -->
+        <receiver
+            android:name=".FocusWidget"
+            android:exported="true"
+            android:label="@string/widget_focus_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_focus_info" />
+        </receiver>
 
         <!-- Home-screen widget with today's tasks. -->
         <receiver

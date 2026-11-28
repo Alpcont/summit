@@ -105,6 +105,44 @@ class SettingsActivity : Activity() {
         row("Plan tomorrow now", "›", 0) { startActivity(Intent(this, PlanActivity::class.java)) }
         note("A notification in the evening that opens a short screen to set up tomorrow.")
 
+        label("Focus")
+        val goal = Focus.goal(this)
+        row("Daily focus goal", fmtDuration(goal), getColor(R.color.accent)) {
+            pickMinutes("Daily focus goal (minutes)", goal, 15, 16 * 60) { p.edit().putInt("focusGoal", it).apply() }
+        }
+        val breaks = p.getBoolean("breaksOn", true)
+        row("Breaks", if (breaks) "On" else "Off", if (breaks) getColor(R.color.accent) else 0) {
+            p.edit().putBoolean("breaksOn", !breaks).apply()
+            render()
+        }
+        if (breaks) {
+            row("Focus before a break", p.getInt("breakEvery", 50).toString() + " min", 0) {
+                pickMinutes("Minutes of focus before a break", p.getInt("breakEvery", 50), 10, 180) { p.edit().putInt("breakEvery", it).apply() }
+            }
+            row("Break length", p.getInt("breakLen", 10).toString() + " min", 0) {
+                pickMinutes("Break length (minutes)", p.getInt("breakLen", 10), 1, 60) { p.edit().putInt("breakLen", it).apply() }
+            }
+        }
+        note("The focus chain in Chains links itself on days you reach the goal. During a break Summit reminds you to walk.")
+        val dnd = p.getBoolean("focusDnd", true)
+        val dndOk = Focus.dndAllowed(this)
+        row("Do Not Disturb during focus", if (!dnd) "Off" else if (dndOk) "On" else "Needs access",
+            if (!dnd) 0 else if (dndOk) getColor(R.color.accent) else getColor(R.color.danger)) {
+            if (dnd && !dndOk) startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+            else {
+                p.edit().putBoolean("focusDnd", !dnd).apply()
+                render()
+            }
+        }
+        if (dnd && !dndOk) note("Tap, find Summit in the list and switch it on. Summit turns Do Not Disturb on when a session starts and sets it back after.")
+        val blocking = Blocking.enabled(this)
+        row("App blocking", if (blocking) "On" else "Off", if (blocking) getColor(R.color.accent) else getColor(R.color.danger)) {
+            Blocking.guide(this)
+        }
+        row("Allowed apps during focus", "›", 0) { startActivity(Intent(this, AllowedAppsActivity::class.java)) }
+        note(if (blocking) "During focus every other app shows Summit's block screen until the timer ends or you stop the session."
+            else "Off: apps are not blocked. Tap App blocking for the steps to switch on Summit in Accessibility settings.")
+
         label("Chains")
         val habitRemind = p.getBoolean("habitRemind", true)
         row("Habit reminder", if (habitRemind) "On" else "Off", if (habitRemind) getColor(R.color.accent) else 0) {
@@ -176,6 +214,28 @@ class SettingsActivity : Activity() {
         about.setTextColor(getColor(R.color.text_dim))
         about.setPadding(0, dp(36), 0, 0)
         body.addView(about)
+    }
+
+    /** A number of minutes, typed in. */
+    private fun pickMinutes(title: String, current: Int, min: Int, max: Int, save: (Int) -> Unit) {
+        val input = EditText(this)
+        input.inputType = InputType.TYPE_CLASS_NUMBER
+        input.setText(current.toString())
+        input.setSelection(input.text.length)
+        val box = LinearLayout(this)
+        box.setPadding(dp(24), dp(8), dp(24), 0)
+        box.addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        AlertDialog.Builder(this).setTitle(title).setView(box)
+            .setPositiveButton("Save") { _, _ ->
+                val n = input.text.toString().toIntOrNull()
+                if (n != null && n in min..max) {
+                    save(n)
+                    Reminders.schedule(this)
+                    TodayWidget.refresh(this)
+                }
+                render()
+            }
+            .setNegativeButton("Cancel", null).show()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {

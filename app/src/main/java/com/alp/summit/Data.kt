@@ -40,6 +40,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
     var origin = ""                    // made by Summit for something: "study|course|exam|day", "asg|id", "review|course|day"
     var moves = 0                      // how often it was moved to another day (for the weekly review)
     var habitId = ""                   // a habit this task is connected to: ticking one links the other
+    var courseId = ""                  // the course this task is for (study time counts toward it)
     var created = System.currentTimeMillis()
     var updated = created
     var syncHash = 0                   // fingerprint of the content last exchanged with the cloud; 0 = never
@@ -73,7 +74,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
         title = o.title; notes = o.notes; date = o.date; time = o.time; duration = o.duration
         priority = o.priority; categoryId = o.categoryId; repeatMask = o.repeatMask; endDate = o.endDate
         remind = o.remind; done = o.done; rank = o.rank; spent = o.spent; created = o.created; updated = o.updated
-        origin = o.origin; moves = o.moves; habitId = o.habitId
+        origin = o.origin; moves = o.moves; habitId = o.habitId; courseId = o.courseId
         moreReminds.clear(); moreReminds.addAll(o.moreReminds)
         doneDates.clear(); doneDates.addAll(o.doneDates)
         skipDates.clear(); skipDates.addAll(o.skipDates)
@@ -86,7 +87,7 @@ class Task(val id: String = UUID.randomUUID().toString()) {
     fun copyTo(d: LocalDate): Task {
         val c = Task()
         c.title = title; c.notes = notes; c.date = d; c.time = time; c.duration = duration
-        c.priority = priority; c.categoryId = categoryId; c.remind = remind; c.habitId = habitId
+        c.priority = priority; c.categoryId = categoryId; c.remind = remind; c.habitId = habitId; c.courseId = courseId
         c.moreReminds.addAll(moreReminds)
         for (s in subtasks) c.subtasks.add(Subtask(UUID.randomUUID().toString(), s.title))
         return c
@@ -106,8 +107,9 @@ object Store {
     val notes = Shelf("notes") { Note.from(it) }
     val courses = Shelf("courses") { Course.from(it) }
     val assignments = Shelf("assignments") { Assignment.from(it) }
+    val sessions = Shelf("sessions") { FocusSession.from(it) }
     /** Everything besides tasks that is kept on the device and synced the same way. */
-    val shelves: List<Shelf<*>> = listOf(habits, notes, courses, assignments)
+    val shelves: List<Shelf<*>> = listOf(habits, notes, courses, assignments, sessions)
 
     // Bookkeeping for sync between devices (see Sync.kt).
     val syncedIds = HashSet<String>()       // tasks the cloud knows about; one missing here was deleted
@@ -212,6 +214,7 @@ object Store {
         if (t.origin.isNotEmpty()) o.put("origin", t.origin)
         if (t.moves > 0) o.put("moves", t.moves)
         if (t.habitId.isNotEmpty()) o.put("habit", t.habitId)
+        if (t.courseId.isNotEmpty()) o.put("course", t.courseId)
         if (t.moreReminds.isNotEmpty()) o.put("moreReminds", JSONArray(t.moreReminds))
         return o
     }
@@ -262,6 +265,7 @@ object Store {
         t.origin = j.optString("origin")
         t.moves = j.optInt("moves", 0)
         t.habitId = j.optString("habit")
+        t.courseId = j.optString("course")
         j.optJSONArray("moreReminds")?.let { a -> for (k in 0 until a.length()) t.moreReminds.add(a.optInt(k)) }
         return t
     }
@@ -284,6 +288,7 @@ object Store {
 
     /** The course a task was made for (a study block, an assignment session or a class review), or null. */
     fun courseOf(t: Task): Course? {
+        if (t.courseId.isNotEmpty()) return courses.get(t.courseId)?.takeIf { !it.hidden }
         if (t.origin.isEmpty()) return null
         val p = t.origin.split('|')
         val c = when (p[0]) {
@@ -292,6 +297,18 @@ object Store {
             else -> null
         }
         return c?.takeIf { !it.hidden }
+    }
+
+    /** Focus minutes for a course: (this week from Monday, all time). */
+    fun studyMinutes(courseId: String, today: LocalDate): Pair<Int, Int> {
+        val monday = today.minusDays((today.dayOfWeek.value - 1).toLong())
+        var week = 0
+        var total = 0
+        for (s in sessions) if (s.courseId == courseId) {
+            total += s.minutes
+            if (!s.day.isBefore(monday)) week += s.minutes
+        }
+        return Pair(week, total)
     }
 
     /** The colour a task is shown in: its course's, else its category's (deeper on the light theme). */
@@ -828,14 +845,30 @@ class Note(id: String = UUID.randomUUID().toString()) : Synced(id) {
     var type = "idea"                    // developer: "bug", "idea" or "change"
     var open = true                      // developer: Open or Done
     var created = System.currentTimeMillis()
+    // Course notes (a notebook per course):
+    var courseId = ""                    // set = a course note
+    var kind = "plain"                   // "homework", "lecture", "exam" (topics) or "plain"
+    var due: LocalDate? = null           // homework: due date
+    var examId = ""                      // exam topics: which exam of the course
+    val photos = ArrayList<String>()     // photo ids (files in photos/, synced separately, see Sync.kt)
+    val tasked = HashSet<String>()       // lines already turned into tasks
+
+    val isCourse: Boolean get() = courseId.isNotEmpty()
 
     override fun json(): JSONObject {
         val a = JSONArray()
         for (c in items) a.put(JSONObject().put("id", c.id).put("text", c.text).put("done", c.done))
-        return JSONObject()
+        val o = JSONObject()
             .put("id", id).put("developer", developer).put("title", title).put("text", text).put("items", a)
             .put("pin", pin?.toString() ?: "").put("type", type).put("open", open)
             .put("created", created).put("updated", updated)
+        // Written only when used, so notes from before keep the same fingerprint.
+        if (courseId.isNotEmpty()) o.put("course", courseId).put("kind", kind)
+        due?.let { o.put("due", it.toString()) }
+        if (examId.isNotEmpty()) o.put("exam", examId)
+        if (photos.isNotEmpty()) o.put("photos", JSONArray(photos))
+        if (tasked.isNotEmpty()) o.put("tasked", JSONArray(tasked.sorted()))
+        return o
     }
 
     companion object {
@@ -853,7 +886,47 @@ class Note(id: String = UUID.randomUUID().toString()) : Synced(id) {
             n.type = j.optString("type", "idea").ifEmpty { "idea" }
             n.open = j.optBoolean("open", true)
             n.created = j.optLong("created", n.created)
+            n.courseId = j.optString("course")
+            n.kind = j.optString("kind", "plain").ifEmpty { "plain" }
+            n.due = j.dateOrNull("due")
+            n.examId = j.optString("exam")
+            j.optJSONArray("photos")?.let { p -> for (i in 0 until p.length()) n.photos.add(p.getString(i)) }
+            n.tasked.addAll(stringSet(j.optJSONArray("tasked")))
             return n
+        }
+    }
+}
+
+/** One focus session: when, how long, on what, how it went. */
+class FocusSession(id: String = UUID.randomUUID().toString()) : Synced(id) {
+    var start = System.currentTimeMillis()
+    var end = 0L
+    var minutes = 0                      // focus minutes (breaks not counted)
+    var day: LocalDate = LocalDate.now()
+    var taskId = ""
+    var courseId = ""
+    var title = ""                       // the task's title at the time (stays if the task is deleted)
+    var rating = 0                       // 1–5 "How focused were you?", 0 = not rated
+    var blocked = 0                      // tries to open a blocked app
+
+    override fun json(): JSONObject = JSONObject()
+        .put("id", id).put("start", start).put("end", end).put("minutes", minutes).put("day", day.toString())
+        .put("task", taskId).put("course", courseId).put("title", title).put("rating", rating).put("blocked", blocked)
+        .put("updated", updated)
+
+    companion object {
+        fun from(j: JSONObject): FocusSession {
+            val s = FocusSession(j.getString("id"))
+            s.start = j.optLong("start", s.start)
+            s.end = j.optLong("end", 0L)
+            s.minutes = j.optInt("minutes", 0)
+            j.dateOrNull("day")?.let { s.day = it }
+            s.taskId = j.optString("task")
+            s.courseId = j.optString("course")
+            s.title = j.optString("title")
+            s.rating = j.optInt("rating", 0)
+            s.blocked = j.optInt("blocked", 0)
+            return s
         }
     }
 }

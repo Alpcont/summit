@@ -121,6 +121,32 @@ fun almostBroken(h: Habit, today: LocalDate): Boolean {
     return now.hour * 60 + now.minute >= (if (h.remindAt >= 0) h.remindAt else 21 * 60)
 }
 
+// ---------- The automatic Focus chain ----------
+
+const val FOCUS_HABIT = "focus-chain"
+
+/**
+ * "Focus": a chain that links itself on every day the daily focus goal was reached. It is worked
+ * out from the focus minutes (which sync), so it is never stored and cannot be ticked by hand.
+ */
+fun focusHabit(ctx: Context): Habit {
+    val today = LocalDate.now()
+    val goal = Focus.goal(ctx)
+    val h = Habit(FOCUS_HABIT)
+    h.title = "Focus"
+    h.mask = 127
+    h.color = 0xFF38C6D9.toInt()
+    h.remindAt = -1
+    h.created = 0L
+    for ((day, minutes) in Store.focusLog) if (minutes >= goal) h.ticks.add(day)
+    if (Focus.minutesOn(ctx, today) >= goal) h.ticks.add(today.toString())
+    val first = Store.focusLog.keys.mapNotNull { try { LocalDate.parse(it) } catch (e: Exception) { null } }.minOrNull()
+    h.start = if (first != null && first.isBefore(today.minusDays(1))) first else today.minusDays(1)
+    val best = h.best(today)
+    for (m in intArrayOf(7, 30, 100)) if (best >= m) h.badges.add(m)
+    return h
+}
+
 // ---------- The Chains tab: flame cards ----------
 
 class ChainsPage(private val a: Activity, private val rerender: () -> Unit) {
@@ -134,7 +160,7 @@ class ChainsPage(private val a: Activity, private val rerender: () -> Unit) {
     fun build(list: LinearLayout) {
         val today = LocalDate.now()
         val p = prefs(a)
-        val habits = Store.habits.items.sortedBy { it.created }
+        val habits = listOf(focusHabit(a)) + Store.habits.items.sortedBy { it.created }
         val view = p.getInt("chainView", 0).coerceIn(0, 2)       // 0 One, 1 Marked, 2 All
 
         // Header: title, today's count, add button.
@@ -183,10 +209,6 @@ class ChainsPage(private val a: Activity, private val rerender: () -> Unit) {
         segLp.topMargin = dp(14)
         list.addView(seg, segLp)
 
-        if (habits.isEmpty()) {
-            list.addView(emptyCard())
-            return
-        }
 
         when (view) {
             0 -> onePager(list, habits, today)
@@ -205,8 +227,10 @@ class ChainsPage(private val a: Activity, private val rerender: () -> Unit) {
             }
         }
 
+        if (Store.habits.items.isEmpty()) list.addView(emptyCard())
+
         // Yesterday can still be linked.
-        for (h in habits) {
+        for (h in habits.filter { it.id != FOCUS_HABIT }) {
             val y = today.minusDays(1)
             if (h.linkable(y, today) && !h.ticked(y)) list.addView(forgotBox(h, y))
         }
@@ -381,10 +405,15 @@ class ChainsPage(private val a: Activity, private val rerender: () -> Unit) {
             }
 
             styleButton(button, glow, linked, planned, big = true)
+            if (h.id == FOCUS_HABIT) button.text = if (linked) "✓  Focus goal reached today" else "Start focus  ·  links itself at " + fmtDuration(Focus.goal(a))
         }
         fill()
 
         button.setOnClickListener {
+            if (h.id == FOCUS_HABIT) {
+                if (!h.ticked(today)) a.startActivity(android.content.Intent(a, FocusActivity::class.java))
+                return@setOnClickListener
+            }
             if (!(h.planned(today) && !today.isBefore(h.start))) return@setOnClickListener
             val before = h.streak(today)
             val on = !h.ticked(today)
@@ -519,9 +548,14 @@ class ChainsPage(private val a: Activity, private val rerender: () -> Unit) {
             sub.setTextColor(if (almostBroken(h, today)) c(R.color.accent) else c(R.color.text_secondary))
             links.set(h, today, glow)
             styleButton(button, glow, linked, h.planned(today) && !today.isBefore(h.start), big = false)
+            if (h.id == FOCUS_HABIT) button.text = if (linked) "Goal reached" else "Start focus"
         }
         fill()
         button.setOnClickListener {
+            if (h.id == FOCUS_HABIT) {
+                if (!h.ticked(today)) a.startActivity(android.content.Intent(a, FocusActivity::class.java))
+                return@setOnClickListener
+            }
             if (!(h.planned(today) && !today.isBefore(h.start))) return@setOnClickListener
             val on = !h.ticked(today)
             Store.linkHabit(h, today, on)
@@ -648,6 +682,11 @@ class ChainsPage(private val a: Activity, private val rerender: () -> Unit) {
     // ----- Edit, mark, delete -----
 
     private fun menu(h: Habit, anchor: View) {
+        if (h.id == FOCUS_HABIT) {
+            android.widget.Toast.makeText(a, "The Focus chain links itself on days you reach your focus goal (Settings → Focus).",
+                android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
         val m = PopupMenu(a, anchor, Gravity.END)
         m.menu.add(0, 1, 0, "Edit")
         m.menu.add(0, 2, 0, if (h.marked) "Unmark" else "Mark")

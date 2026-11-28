@@ -17,7 +17,13 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
 - Allow installing apps from your browser / file manager when Android asks.
 - Allow notifications when Summit asks on first start (needed for reminders).
 - If reminders arrive late: Settings → Apps → Summit → Battery → **Unrestricted**
-  (there is a shortcut in Summit's own settings).
+  (there is a shortcut in Summit's own settings). This also keeps focus sessions running.
+- **Do Not Disturb during focus**: Summit asks once before your first session. On the page that
+  opens, find Summit and switch it on (also: Summit Settings → Focus → Do Not Disturb).
+- **App blocking during focus** (Summit Settings → Focus → App blocking): Android's
+  Settings → Accessibility → Installed apps → Summit focus blocking → On. If the switch is grey
+  ("Restricted setting"): Settings → Apps → Summit → ⋮ (top right) → Allow restricted settings,
+  then try again. Summit only sees which app opens, during focus sessions.
 
 ## How it works
 - **Bottom bar**: Today, Calendar, Chains, Notes, Someday.
@@ -72,7 +78,15 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
   says when). Hold a card to edit, mark or delete it.
 - **Task ↔ habit**: in the task form, pick a Habit. Ticking that task links the habit for the
   day, and linking the habit ticks the task.
-- **Notes**: switch between Productivity and Developer at the top; the search field looks
+- **Course notes**: Notes → Courses shows a notebook per course in its colour. Entries are
+  Homework (due date; "Make it a task" adds it as a task for that course), Lecture notes (text,
+  checklists and photos from the camera or gallery; photos are shrunk to about 200 KB and sync),
+  Exam topics (linked to an exam; they show inside that exam's study suggestions) or a Note.
+  "Turn a line into a task" makes any line of a course note a task with one tap.
+- **Exams**: an optional start time. On Today the exam chips count from the day shown ("ECON 101
+  midterm in 3 days", "exam today 09:00") and disappear after the exam; calm colour, orange within
+  7 days, red within 2.
+- **Notes**: switch between Productivity, Courses and Developer at the top; the search field looks
   through all notes; + adds a note. Productivity notes can have a checklist and be pinned to a day (then they
   show on that day on the Today page, in Calendar → Day, and in the evening planning before it). Developer notes are about
   Summit itself, with a type (Bug, Idea, Change) and status (Open, Done), and filter chips
@@ -90,8 +104,23 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
   normal tasks, which you can change afterwards like any task.
 - **Progress** (bars icon on Today): streak, this week's chart, last 30 days, focus time.
   A streak day is a day on which every planned task was ticked; days without tasks are skipped.
-- **Focus timer**: hold a task → Start focus timer. The minutes are logged on the task when
-  the session ends, also if the app is closed in between.
+- **Focus** (one engine for the whole app, only one session at a time): the focus card on
+  Today (under the mountain) shows a ring for today's goal (3 h, Settings → Focus), lets you pick
+  a task or none and 25m / 50m / 90m / Custom / Until I stop, and while a session runs shows the
+  timer, the task, Pause and Stop. "Start my day" in the Day view, its play buttons and the hold
+  menu's "Start focus timer" use the same engine; "Start my day" moves on to the next open task
+  when one is ticked. **Full screen**: dark, a big timer, the task and its subtasks to tick, the
+  screen stays on, works sideways. **Breaks**: 50 min focus / 10 min break (Settings), with a walk
+  reminder; apps open freely in the break. **Do Not Disturb** goes on during a session and back
+  to how it was after. **App blocking**: every app is blocked during focus except the allowed ones
+  (Settings → Focus → Allowed apps; phone, contacts, browser, Samsung Notes, Drive, PDF, clock,
+  calculator by default; Summit, the home screen, the keyboard, calls and system screens always
+  work; the Settings app is blocked unless you allow it). A blocked app shows Summit's block
+  screen until the timer ends or you stop the session; pausing does not unblock. The notification
+  is always there during a session (time, Pause, Stop). After a session: "How focused were you?"
+  1–5 and how often you tried to open a blocked app. The **Focus** chain in Chains links itself on
+  days you reach the goal. Focus minutes count toward the task and its course (study time on the
+  Courses and Progress screens). **Focus widget**: one tap starts focus on the next open task.
 - **Evening planning**: a nudge at 21:30 (changeable) opens a screen to set up tomorrow:
   add tasks, carry over what is still open, pull tasks from Someday, see notes pinned to
   tomorrow, and add a "Review … notes" task for each class you had today (or skip it).
@@ -104,8 +133,9 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
 - **Sync**: needs the file `app/google-services.json` from your Firebase project (Android app
   `com.alp.summit`, Google sign-in enabled, Firestore created). Once the file is in the repo,
   the next build has sync: Settings → Sign in with Google, on both devices.
-- What syncs: tasks, categories, focus time, habits, notes, courses (with exams) and
-  assignments. Theme and reminder times stay on each device.
+- What syncs: tasks, categories, focus time and sessions, habits, notes (with photos), courses
+  (with exams) and assignments. Theme, reminder times, the focus goal and breaks, Do Not Disturb
+  and the allowed apps stay on each device.
 - How sync decides: each task (habit, note, …) is compared separately; if both devices changed
   the same one, the later change wins. Deleting it on one device deletes it on the other.
 - Firestore rules that keep the data private to your account are in the chat with Claude and
@@ -116,6 +146,9 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
 2. **Done**: home-screen widget, streaks and stats, focus timer, smart quick-add, evening planning.
 3. **Done**: phone calendar events next to tasks; sync between phone and tablet (switched on
    in 3.2 with the Firebase file in the repo).
+6. **Done (5.0)**: course notebooks with photos, one focus engine (focus card, full screen,
+   breaks, Do Not Disturb, app blocking, widget, ratings, focus chain, study time per course),
+   exam times and countdown from the day shown.
 5. **Done (4.2)**: Chains as flame cards, Notes redesign (Manrope font), task ↔ habit,
    streak freeze, habit flames on the small widget.
 4. **Done (4.0)**: swipe between days, small widget, light theme, Notes, Chains, course mode
@@ -126,7 +159,9 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
 - Backup to a file and restore.
 - Light theme.
 - Turkish words in quick-add ("yarın", "bugün").
-- A running focus timer shown in the notification bar.
+- Coming in 5.1: auto-fill my day, sort automatically again, routines, more repeat options,
+  upcoming view, voice add, share into Summit, evening reflection, changelog view, rename
+  subtask in place.
 - Not in 4.0 on purpose: auto-fill my day, energy hours, estimate check, routines, week
   templates, breaks, Do Not Disturb, share into Summit, score card.
 - A "hand in" task on an assignment's deadline; exam times (now only the date).

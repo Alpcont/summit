@@ -41,6 +41,7 @@ class EditTaskActivity : Activity() {
     private var priority = 2
     private var category = ""
     private var habit = ""
+    private var course = ""
     private val subs = ArrayList<Subtask>()
 
     private lateinit var titleInput: EditText
@@ -71,6 +72,7 @@ class EditTaskActivity : Activity() {
             priority = t.priority
             category = t.categoryId
             habit = t.habitId
+            course = t.courseId.ifEmpty { Store.courseOf(t)?.id ?: "" }
             for (s in t.subtasks) subs.add(Subtask(s.id, s.title))
             titleInput.setText(t.title)
             notesInput.setText(t.notes)
@@ -79,6 +81,7 @@ class EditTaskActivity : Activity() {
             time = intent.getIntExtra("time", -1)
             reminds.add(0)   // a new task reminds at its time, as before
             category = intent.getStringExtra("category") ?: ""
+            course = intent.getStringExtra("course") ?: ""
             titleInput.setText(intent.getStringExtra("title") ?: "")
             titleInput.setSelection(titleInput.text.length)
             titleInput.requestFocus()
@@ -187,6 +190,16 @@ class EditTaskActivity : Activity() {
         categoryRow.removeAllViews()
         for (c in Store.categories) {
             add(categoryRow, c.name, category == c.id, Look.tone(c.color)) { category = if (category == c.id) "" else c.id }
+        }
+
+        // The course this task is for: its focus time counts as study time for the course.
+        val courseRow = findViewById<FlowLayout>(R.id.course_chips)
+        courseRow.removeAllViews()
+        val courses = Courses.active()
+        findViewById<View>(R.id.label_course).visibility = if (courses.isEmpty()) View.GONE else View.VISIBLE
+        if (courses.isNotEmpty()) {
+            add(courseRow, "None", course.isEmpty()) { course = "" }
+            for (c in courses) add(courseRow, c.code, course == c.id, Look.tone(c.color)) { course = if (course == c.id) "" else c.id }
         }
 
         // Connect the task to a habit (only when there are habits).
@@ -363,6 +376,7 @@ class EditTaskActivity : Activity() {
         t.priority = priority
         t.categoryId = category
         t.habitId = habit
+        t.courseId = course
         t.subtasks.clear()
         t.subtasks.addAll(subs)
         val ids = subs.map { it.id }
