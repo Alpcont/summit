@@ -62,6 +62,7 @@ object Courses {
      */
     fun examChips(shown: LocalDate, today: LocalDate): List<Triple<Course, String, Int>> {
         val out = ArrayList<Triple<Course, String, Int>>()
+        val order = ArrayList<Long>()
         for (c in active()) for (e in c.exams.sortedBy { it.date }) {
             if (e.date.isBefore(shown)) continue
             // On the exam day itself, the chip goes once the exam is well over.
@@ -75,8 +76,10 @@ object Courses {
                 else -> "$name in $n days"
             }
             out.add(Triple(c, text, if (n > 7) 0 else if (n > 2) 1 else 2))
+            order.add(e.date.toEpochDay() * 2000 + (if (e.time >= 0) e.time else 0))
         }
-        return out
+        // Soonest first, whatever the course.
+        return out.indices.sortedBy { order[it] }.map { out[it] }
     }
 
     /** "today", "tomorrow", "in 5 days". */

@@ -62,6 +62,10 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
   all of today's tasks; "Summit: important" is smaller and lists only High and Medium tasks
   (scrolls if they do not fit), with today's habits as small flames below; tap a task to tick
   it, a flame to link that habit, + to add a task.
+- **Notes widget** ("Summit: notes"): notes pinned to today first, then your latest notes. Tap
+  a note to open it, the header to open the Notes tab, + to write a new note.
+- **Widget theme**: Settings → Widgets → Widget theme: Same as app, Dark, Grey or Light, for all
+  widgets (e.g. the app light, the widgets dark).
 - **Theme**: Settings → Theme switches Dark (default) → Grey (a softer charcoal) → Light, per
   device. All screens and both widgets follow it.
 - **Chains** (don't break the chain), flame cards: switch One / Marked / All at the top.
@@ -85,7 +89,7 @@ https://github.com/Alpcont/summit/releases/latest/download/Summit.apk
   "Turn a line into a task" makes any line of a course note a task with one tap.
 - **Exams**: an optional start time. On Today the exam chips count from the day shown ("ECON 101
   midterm in 3 days", "exam today 09:00") and disappear after the exam; calm colour, orange within
-  7 days, red within 2.
+  7 days, red within 2. The soonest exam comes first.
 - **Notes**: switch between Productivity, Courses and Developer at the top; the search field looks
   through all notes; + adds a note. Productivity notes can have a checklist and be pinned to a day (then they
   show on that day on the Today page, in Calendar → Day, and in the evening planning before it). Developer notes are about

@@ -186,6 +186,7 @@ class MainActivity : Activity() {
         openPlan = intent?.getBooleanExtra("plan", false) == true
         if (intent?.getBooleanExtra("day", false) == true) showDay()
         if (intent?.getBooleanExtra("chains", false) == true) tab = 2
+        if (intent?.getBooleanExtra("notes", false) == true) tab = 3
     }
 
     private fun applySide() {
@@ -207,6 +208,7 @@ class MainActivity : Activity() {
         if (intent.getBooleanExtra("plan", false)) openPlan = true
         if (intent.getBooleanExtra("day", false)) showDay()
         if (intent.getBooleanExtra("chains", false)) tab = 2
+        if (intent.getBooleanExtra("notes", false)) tab = 3
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

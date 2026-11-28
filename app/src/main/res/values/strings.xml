@@ -42,4 +42,6 @@
     <string name="widget_focus_description">One tap starts focus on your next task; shows the running timer.</string>
     <string name="block_service_label">Summit focus blocking</string>
     <string name="block_service_description">Blocks other apps during a Summit focus session, except the ones you allow. Summit only sees which app opens, reads nothing inside apps and sends nothing anywhere.</string>
+    <string name="widget_notes_label">Summit: notes</string>
+    <string name="widget_notes_description">Notes pinned to today and your latest notes. Tap one to open it.</string>
 </resources>

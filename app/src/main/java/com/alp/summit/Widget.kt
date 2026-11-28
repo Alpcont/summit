@@ -62,6 +62,7 @@ open class TodayWidget : AppWidgetProvider() {
             val manager = AppWidgetManager.getInstance(ctx) ?: return
             draw(ctx, manager, TodayWidget::class.java, false)
             draw(ctx, manager, SmallWidget::class.java, true)
+            NotesWidget.refresh(ctx)    // notes change on the same save
         }
 
         private fun draw(ctx: Context, manager: AppWidgetManager, kind: Class<*>, important: Boolean) {
@@ -76,7 +77,7 @@ open class TodayWidget : AppWidgetProvider() {
             val code = if (important) 20 else 0      // separate request codes, so the two widgets keep their own intents
 
             // Widgets are drawn by the home screen, so the colours are set here from the chosen theme.
-            val theme = Look.theme(ctx)
+            val theme = Look.widgetTheme(ctx)
             val light = theme == "light"
             val grey = theme == "grey"
             val cPrimary = if (light) 0xFF1F1A16.toInt() else if (grey) 0xFFECEDEF.toInt() else 0xFFF2F3F5.toInt()
@@ -177,3 +178,79 @@ open class TodayWidget : AppWidgetProvider() {
 
 /** The compact widget: only today's High and Medium priority tasks. The list scrolls when it does not fit. */
 class SmallWidget : TodayWidget()
+
+/**
+ * Notes widget: notes pinned to today first, then the latest ones. Tap a note to open it,
+ * the header to open the Notes tab, + to write a new note.
+ */
+class NotesWidget : AppWidgetProvider() {
+    override fun onUpdate(ctx: Context, manager: AppWidgetManager, ids: IntArray) = refresh(ctx)
+
+    companion object {
+        fun refresh(ctx: Context) {
+            val manager = AppWidgetManager.getInstance(ctx) ?: return
+            val ids = manager.getAppWidgetIds(ComponentName(ctx, NotesWidget::class.java))
+            if (ids == null || ids.isEmpty()) return
+            Store.load(ctx)
+            val today = LocalDate.now()
+            val theme = Look.widgetTheme(ctx)
+            val light = theme == "light"
+            val grey = theme == "grey"
+            val cPrimary = if (light) 0xFF1F1A16.toInt() else if (grey) 0xFFECEDEF.toInt() else 0xFFF2F3F5.toInt()
+            val cSecondary = if (light) 0xFF6B6159.toInt() else if (grey) 0xFFA3A9B2.toInt() else 0xFF9096A0.toInt()
+            val cDim = if (light) 0xFFA0968C.toInt() else if (grey) 0xFF7A808A.toInt() else 0xFF5C616B.toInt()
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+
+            // Productivity and course notes (developer notes stay in the app).
+            val notes = Store.notes.items.filter { !it.developer }
+            val pinned = notes.filter { it.pin == today }.sortedBy { it.created }
+            val shown = (pinned + notes.filter { it !in pinned }.sortedByDescending { it.updated }).take(20)
+
+            val v = RemoteViews(ctx.packageName, R.layout.widget_today)
+            v.setInt(R.id.w_root, "setBackgroundResource",
+                if (light) R.drawable.widget_bg_light else if (grey) R.drawable.widget_bg_grey else R.drawable.widget_bg)
+            v.setImageViewResource(R.id.w_icon, R.drawable.ic_notes)
+            v.setTextViewText(R.id.w_day, "Notes")
+            v.setTextColor(R.id.w_day, cPrimary)
+            v.setTextViewText(R.id.w_score, if (pinned.isNotEmpty()) "${pinned.size} for today" else "")
+            v.setTextColor(R.id.w_score, cSecondary)
+            v.setTextColor(R.id.w_empty, cDim)
+            v.setViewVisibility(R.id.w_habits, View.GONE)
+            val open = Intent(ctx, MainActivity::class.java).putExtra("notes", true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            v.setOnClickPendingIntent(R.id.w_header, PendingIntent.getActivity(ctx, 80, open, flags))
+            val add = Intent(ctx, NoteActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            v.setOnClickPendingIntent(R.id.w_add, PendingIntent.getActivity(ctx, 81, add, flags))
+
+            if (Build.VERSION.SDK_INT >= 31) {
+                val items = RemoteViews.RemoteCollectionItems.Builder().setHasStableIds(true).setViewTypeCount(1)
+                for (n in shown) {
+                    val row = RemoteViews(ctx.packageName, R.layout.widget_row)
+                    row.setViewVisibility(R.id.w_box, View.GONE)
+                    row.setTextViewText(R.id.w_title, n.title.ifBlank { n.text.lineSequence().firstOrNull { it.isNotBlank() } ?: "Untitled note" })
+                    row.setTextColor(R.id.w_title, cPrimary)
+                    val course = Store.courses.get(n.courseId)
+                    row.setTextViewText(R.id.w_time, when {
+                        n.pin == today -> "Today"
+                        course != null -> course.code
+                        else -> ""
+                    })
+                    row.setTextColor(R.id.w_time, cSecondary)
+                    row.setOnClickFillInIntent(R.id.w_row, Intent().putExtra("id", n.id))
+                    items.addItem(n.id.hashCode().toLong(), row)
+                }
+                v.setRemoteAdapter(R.id.w_list, items.build())
+                v.setEmptyView(R.id.w_list, R.id.w_empty)
+                v.setTextViewText(R.id.w_empty, "No notes yet.\nTap + to write one.")
+                // A tap on a line opens that note: its id is filled into this intent.
+                val note = Intent(ctx, NoteActivity::class.java)
+                v.setPendingIntentTemplate(R.id.w_list,
+                    PendingIntent.getActivity(ctx, 82, note, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE))
+            } else {
+                v.setViewVisibility(R.id.w_list, View.GONE)
+                v.setTextViewText(R.id.w_empty, "Tap to open your notes.")
+            }
+            manager.updateAppWidget(ids, v)
+        }
+    }
+}

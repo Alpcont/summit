@@ -62,6 +62,14 @@ object Look {
 
     fun isLight(ctx: Context): Boolean = theme(ctx) == "light"
 
+    /** The widgets' own theme (Settings → Widgets): the app's theme, or always dark, grey or light. */
+    fun widgetTheme(ctx: Context): String = when (prefs(ctx).getString("widgetTheme", "app")) {
+        "dark" -> "dark"
+        "grey" -> "grey"
+        "light" -> "light"
+        else -> theme(ctx)
+    }
+
     fun wrap(base: Context): Context {
         current = theme(base)
         light = current == "light"

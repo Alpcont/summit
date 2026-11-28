@@ -70,6 +70,22 @@ class SettingsActivity : Activity() {
         }
         note("Chosen on each device. Tap to switch: Dark → Grey → Light.")
 
+        label("Widgets")
+        val wt = p.getString("widgetTheme", "app") ?: "app"
+        row("Widget theme", if (wt == "app") "Same as app" else wt.replaceFirstChar { it.uppercase() }, getColor(R.color.accent)) {
+            val next = when (wt) {
+                "app" -> "dark"
+                "dark" -> "grey"
+                "grey" -> "light"
+                else -> "app"
+            }
+            p.edit().putString("widgetTheme", next).apply()
+            TodayWidget.refresh(this)
+            FocusWidget.refresh(this)
+            render()
+        }
+        note("All home-screen widgets use this, separately from the app. Tap to switch: Same as app → Dark → Grey → Light.")
+
         label("Morning")
         val nudge = p.getBoolean("nudge", true)
         row("Morning nudge", if (nudge) "On" else "Off", if (nudge) getColor(R.color.accent) else 0) {
